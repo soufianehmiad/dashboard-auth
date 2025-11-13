@@ -102,6 +102,45 @@ function validateInputLength(value, fieldName, maxLength) {
   return { valid: true };
 }
 
+// SECURITY: Strong password policy validation
+function validatePasswordStrength(password) {
+  if (!password || typeof password !== 'string') {
+    return { valid: false, error: 'Password is required' };
+  }
+
+  // Minimum 12 characters
+  if (password.length < 12) {
+    return { valid: false, error: 'Password must be at least 12 characters long' };
+  }
+
+  // Maximum 128 characters (prevent DoS)
+  if (password.length > 128) {
+    return { valid: false, error: 'Password must be less than 128 characters' };
+  }
+
+  // Must contain at least one lowercase letter
+  if (!/[a-z]/.test(password)) {
+    return { valid: false, error: 'Password must contain at least one lowercase letter' };
+  }
+
+  // Must contain at least one uppercase letter
+  if (!/[A-Z]/.test(password)) {
+    return { valid: false, error: 'Password must contain at least one uppercase letter' };
+  }
+
+  // Must contain at least one number
+  if (!/\d/.test(password)) {
+    return { valid: false, error: 'Password must contain at least one number' };
+  }
+
+  // Must contain at least one special character
+  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
+    return { valid: false, error: 'Password must contain at least one special character (!@#$%^&*()_+-=[]{};\':"|,.<>/?)' };
+  }
+
+  return { valid: true };
+}
+
 /**
  * NGINX PROXY MANAGEMENT - arr-proxy Container
  *
@@ -161,7 +200,8 @@ async function readNginxConfig() {
     return { success: true, content: result.stdout };
   } catch (error) {
     secureLog('error', 'Error reading nginx config:', error.message);
-    return { success: false, error: error.message };
+    // SECURITY: Don't expose detailed error messages to users
+    return { success: false, error: 'Failed to read configuration file' };
   }
 }
 
@@ -287,7 +327,8 @@ async function writeNginxConfig(content) {
     return { success: true };
   } catch (error) {
     secureLog('error', 'Error writing nginx config:', error.message);
-    return { success: false, error: error.message };
+    // SECURITY: Don't expose detailed error messages to users
+    return { success: false, error: 'Failed to write configuration file' };
   }
 }
 
@@ -400,7 +441,8 @@ async function reloadNginx() {
     return { success: true, message: 'Nginx reloaded successfully' };
   } catch (error) {
     secureLog('error', 'Error reloading nginx:', error.message);
-    return { success: false, error: error.message };
+    // SECURITY: Don't expose detailed error messages to users
+    return { success: false, error: 'Failed to reload nginx server' };
   }
 }
 
@@ -466,7 +508,7 @@ app.use('/api/', apiLimiter);
 
 // SECURITY: CSRF Protection for state-changing operations
 const csrfSecret = process.env.CSRF_SECRET || crypto.randomBytes(32).toString('hex');
-const { generateToken, doubleCsrfProtection } = doubleCsrf({
+const { generateCsrfToken, doubleCsrfProtection } = doubleCsrf({
   getSecret: () => csrfSecret,
   cookieName: 'csrf-token',
   cookieOptions: {
@@ -476,12 +518,13 @@ const { generateToken, doubleCsrfProtection } = doubleCsrf({
     httpOnly: true
   },
   size: 64,
-  ignoredMethods: ['GET', 'HEAD', 'OPTIONS']
+  ignoredMethods: ['GET', 'HEAD', 'OPTIONS'],
+  getSessionIdentifier: (req) => req.user?.id || 'anonymous'
 });
 
 // Provide CSRF token to frontend
 app.get('/api/csrf-token', (req, res) => {
-  const token = generateToken(req, res);
+  const token = generateCsrfToken(req, res);
   res.json({ token });
 });
 
@@ -513,11 +556,13 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // Add display_name and password_must_change columns if they don't exist (migration for existing databases)
+  // Add display_name, password_must_change, failed_login_attempts, locked_until columns if they don't exist (migration for existing databases)
   db.all("PRAGMA table_info(users)", (err, columns) => {
     if (!err) {
       const hasDisplayName = columns.some(col => col.name === 'display_name');
       const hasPasswordMustChange = columns.some(col => col.name === 'password_must_change');
+      const hasFailedAttempts = columns.some(col => col.name === 'failed_login_attempts');
+      const hasLockedUntil = columns.some(col => col.name === 'locked_until');
 
       if (!hasDisplayName) {
         db.run("ALTER TABLE users ADD COLUMN display_name TEXT", (err) => {
@@ -530,6 +575,20 @@ db.serialize(() => {
         db.run("ALTER TABLE users ADD COLUMN password_must_change INTEGER DEFAULT 0", (err) => {
           if (err) console.error('Error adding password_must_change column:', err);
           else console.log('Added password_must_change column to users table');
+        });
+      }
+
+      if (!hasFailedAttempts) {
+        db.run("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER DEFAULT 0", (err) => {
+          if (err) console.error('Error adding failed_login_attempts column:', err);
+          else console.log('Added failed_login_attempts column to users table');
+        });
+      }
+
+      if (!hasLockedUntil) {
+        db.run("ALTER TABLE users ADD COLUMN locked_until DATETIME", (err) => {
+          if (err) console.error('Error adding locked_until column:', err);
+          else console.log('Added locked_until column to users table');
         });
       }
     }
@@ -622,7 +681,8 @@ db.serialize(() => {
 
   db.get('SELECT username FROM users WHERE username = ?', ['admin'], (err, row) => {
     if (!row) {
-      const defaultPassword = 'change_this_password';
+      // SECURITY: Default password meets strong password policy (12+ chars, upper, lower, number, special)
+      const defaultPassword = 'Admin@123456';
       bcrypt.hash(defaultPassword, 10, (err, hash) => {
         if (err) {
           console.error('Error hashing password:', err);
@@ -631,7 +691,7 @@ db.serialize(() => {
         // Security: Force password change on first login with default credentials
         db.run('INSERT INTO users (username, password, password_must_change) VALUES (?, ?, ?)', ['admin', hash, 1], (err) => {
           if (err) console.error('Error creating admin:', err);
-          else console.log('Default admin user created (admin/change_this_password) - PASSWORD CHANGE REQUIRED');
+          else console.log('Default admin user created (admin/Admin@123456) - PASSWORD CHANGE REQUIRED');
         });
       });
     }
@@ -694,8 +754,31 @@ const verifyToken = (req, res, next) => {
   }
 };
 
+// SECURITY: Content-Type validation middleware
+const validateContentType = (req, res, next) => {
+  // Only validate POST, PUT, PATCH, DELETE requests with a body
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    const contentType = req.get('Content-Type');
+
+    // Allow requests without body (logout, etc.)
+    if (!req.body || Object.keys(req.body).length === 0) {
+      return next();
+    }
+
+    // Require application/json for requests with body
+    if (!contentType || !contentType.includes('application/json')) {
+      return res.status(415).json({
+        error: 'Unsupported Media Type',
+        message: 'Content-Type must be application/json'
+      });
+    }
+  }
+
+  next();
+};
+
 // Routes
-app.post('/api/login', loginLimiter, (req, res) => {
+app.post('/api/login', loginLimiter, validateContentType, (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -718,6 +801,24 @@ app.post('/api/login', loginLimiter, (req, res) => {
       return res.status(500).json({ error: 'Database error' });
     }
 
+    // SECURITY: Check if account is locked
+    if (user && user.locked_until) {
+      const lockedUntil = new Date(user.locked_until);
+      const now = new Date();
+
+      if (now < lockedUntil) {
+        const minutesRemaining = Math.ceil((lockedUntil - now) / 60000);
+        return res.status(423).json({
+          error: `Account is locked due to too many failed login attempts. Please try again in ${minutesRemaining} minute(s).`
+        });
+      } else {
+        // Lock period expired, reset failed attempts
+        db.run('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [user.id]);
+        user.failed_login_attempts = 0;
+        user.locked_until = null;
+      }
+    }
+
     // SECURITY: Timing attack mitigation - always perform password comparison
     // even if user doesn't exist, using a dummy hash
     const dummyHash = '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'; // Pre-computed hash
@@ -726,8 +827,31 @@ app.post('/api/login', loginLimiter, (req, res) => {
     bcrypt.compare(password, hashToCompare, (err, isValid) => {
       // Always check both conditions to prevent timing leaks
       if (err || !isValid || !user) {
+        // SECURITY: Increment failed login attempts
+        if (user) {
+          const failedAttempts = (user.failed_login_attempts || 0) + 1;
+          const maxAttempts = 10;
+
+          if (failedAttempts >= maxAttempts) {
+            // Lock account for 30 minutes
+            const lockUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+            db.run('UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?',
+              [failedAttempts, lockUntil.toISOString(), user.id], (err) => {
+                if (err) secureLog('error', 'Failed to lock account:', err);
+              });
+            return res.status(423).json({
+              error: 'Account locked due to too many failed login attempts. Please try again in 30 minutes.'
+            });
+          } else {
+            // Increment failed attempts
+            db.run('UPDATE users SET failed_login_attempts = ? WHERE id = ?', [failedAttempts, user.id]);
+          }
+        }
         return res.status(401).json({ error: 'Invalid credentials' });
       }
+
+      // SECURITY: Reset failed login attempts on successful login
+      db.run('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [user.id]);
 
       const token = jwt.sign(
         { id: user.id, username: user.username },
@@ -756,12 +880,12 @@ app.post('/api/login', loginLimiter, (req, res) => {
   });
 });
 
-app.post('/api/logout', doubleCsrfProtection, (req, res) => {
+app.post('/api/logout', validateContentType, doubleCsrfProtection, (req, res) => {
   res.clearCookie('token', { path: '/' });
   res.json({ success: true });
 });
 
-app.post('/api/change-password', verifyToken, doubleCsrfProtection, (req, res) => {
+app.post('/api/change-password', verifyToken, validateContentType, doubleCsrfProtection, (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword || !newPassword) {
@@ -779,8 +903,10 @@ app.post('/api/change-password', verifyToken, doubleCsrfProtection, (req, res) =
     return res.status(400).json({ error: newPwdValidation.error });
   }
 
-  if (newPassword.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  // SECURITY: Strong password policy
+  const strengthValidation = validatePasswordStrength(newPassword);
+  if (!strengthValidation.valid) {
+    return res.status(400).json({ error: strengthValidation.error });
   }
 
   const userId = req.user.id;
@@ -817,7 +943,7 @@ app.post('/api/change-password', verifyToken, doubleCsrfProtection, (req, res) =
   });
 });
 
-app.post('/api/change-display-name', verifyToken, doubleCsrfProtection, (req, res) => {
+app.post('/api/change-display-name', verifyToken, validateContentType, doubleCsrfProtection, (req, res) => {
   const { displayName } = req.body;
 
   if (!displayName || !displayName.trim()) {
@@ -957,7 +1083,7 @@ app.get('/api/dashboard/categories', verifyToken, (req, res) => {
 });
 
 // POST create new category
-app.post('/api/categories', verifyToken, doubleCsrfProtection, (req, res) => {
+app.post('/api/categories', verifyToken, validateContentType, doubleCsrfProtection, (req, res) => {
   const { id, name, display_order, color, icon } = req.body;
 
   if (!id || !name) {
@@ -987,7 +1113,7 @@ app.post('/api/categories', verifyToken, doubleCsrfProtection, (req, res) => {
 });
 
 // PUT update category
-app.put('/api/categories/:id', verifyToken, doubleCsrfProtection, (req, res) => {
+app.put('/api/categories/:id', verifyToken, validateContentType, doubleCsrfProtection, (req, res) => {
   const { id } = req.params;
   const { name, display_order, color, icon } = req.body;
 
@@ -1082,7 +1208,7 @@ app.get('/api/services', verifyToken, (req, res) => {
 });
 
 // POST create new service
-app.post('/api/services', verifyToken, doubleCsrfProtection, async (req, res) => {
+app.post('/api/services', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
   const { name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order } = req.body;
 
   if (!name || !path || !icon_url || !category || !service_type) {
@@ -1173,7 +1299,7 @@ app.post('/api/services', verifyToken, doubleCsrfProtection, async (req, res) =>
 });
 
 // PUT update existing service
-app.put('/api/services/:id', verifyToken, doubleCsrfProtection, async (req, res) => {
+app.put('/api/services/:id', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
   const { id } = req.params;
   const { name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order, enabled } = req.body;
 
@@ -1343,7 +1469,7 @@ app.get('/api/nginx/locations', verifyToken, async (req, res) => {
 });
 
 // DELETE nginx location block
-app.delete('/api/nginx/locations', verifyToken, doubleCsrfProtection, async (req, res) => {
+app.delete('/api/nginx/locations', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
   try {
     const { path, name } = req.body;
 
@@ -1358,7 +1484,8 @@ app.delete('/api/nginx/locations', verifyToken, doubleCsrfProtection, async (req
 
     const reloadResult = await reloadNginx();
     if (!reloadResult.success) {
-      return res.status(500).json({ error: 'Nginx reload failed', details: reloadResult.error });
+      // SECURITY: Don't expose detailed error messages
+      return res.status(500).json({ error: 'Failed to reload nginx server' });
     }
 
     res.json({ success: true, message: 'Location removed successfully' });
@@ -1375,7 +1502,8 @@ app.get('/api/nginx/config', verifyToken, async (req, res) => {
     if (result.success) {
       res.json({ success: true, config: result.content });
     } else {
-      res.status(500).json({ error: 'Failed to read nginx config', details: result.error });
+      // SECURITY: Don't expose detailed error messages
+      res.status(500).json({ error: 'Failed to read configuration file' });
     }
   } catch (error) {
     console.error('Error reading nginx config:', error);
@@ -1384,7 +1512,7 @@ app.get('/api/nginx/config', verifyToken, async (req, res) => {
 });
 
 // PUT nginx configuration
-app.put('/api/nginx/config', verifyToken, doubleCsrfProtection, async (req, res) => {
+app.put('/api/nginx/config', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
   try {
     const { config } = req.body;
 
@@ -1401,16 +1529,17 @@ app.put('/api/nginx/config', verifyToken, doubleCsrfProtection, async (req, res)
     // Write the new config
     const writeResult = await writeNginxConfig(config);
     if (!writeResult.success) {
-      return res.status(500).json({ error: 'Failed to write nginx config', details: writeResult.error });
+      // SECURITY: Don't expose detailed error messages
+      return res.status(500).json({ error: 'Failed to write configuration file' });
     }
 
     // Test and reload nginx
     const reloadResult = await reloadNginx();
     if (!reloadResult.success) {
+      // SECURITY: Don't expose detailed error messages
       return res.status(500).json({
-        error: 'Config syntax error',
-        details: reloadResult.error,
-        message: 'Nginx config was updated but failed validation. Please fix the syntax errors.'
+        error: 'Configuration validation failed',
+        message: 'The configuration file contains syntax errors. Please review and try again.'
       });
     }
 
@@ -1591,6 +1720,38 @@ app.use((req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
   res.redirect('/login');
+});
+
+// SECURITY: Global error handler - catch any unhandled errors
+app.use((err, req, res, next) => {
+  // Log error securely (sanitize sensitive data)
+  secureLog('error', 'Unhandled error:', err.message);
+  console.error('Error stack:', err.stack);
+
+  // Don't expose error details to client
+  if (req.path.startsWith('/api/')) {
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: 'An unexpected error occurred. Please try again later.'
+    });
+  }
+
+  // For HTML pages, redirect to login
+  res.redirect('/login?error=server');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  secureLog('error', 'Unhandled Promise Rejection:', reason);
+  console.error('Promise:', promise);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  secureLog('error', 'Uncaught Exception:', err.message);
+  console.error('Error stack:', err.stack);
+  // Exit gracefully after logging
+  process.exit(1);
 });
 
 app.listen(PORT, () => {
