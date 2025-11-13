@@ -18,6 +18,17 @@ const helmet = require('helmet');
 const { doubleCsrf } = require('csrf-csrf');
 const { createClient } = require('redis');
 const { RedisStore } = require('rate-limit-redis');
+const {
+  requireRole,
+  requirePermission,
+  requireSuperAdmin,
+  requireAdmin,
+  requireCanManageUser,
+  requireSelfOrAdmin,
+  attachPermissions,
+  ROLES,
+  PERMISSIONS
+} = require('./middleware/rbac');
 
 const app = express();
 const PORT = 3000;
@@ -733,7 +744,7 @@ pool.on('error', (err) => {
 // Data migrated via database/migrate-sqlite-to-postgres.js
 
 // JWT verification middleware
-const verifyToken = (req, res, next) => {
+const verifyToken = async (req, res, next) => {
   const token = req.cookies.token;
 
   if (!token) {
@@ -748,7 +759,33 @@ const verifyToken = (req, res, next) => {
 
   try {
     const verified = jwt.verify(token, JWT_SECRET);
-    req.user = verified;
+
+    // Fetch full user details including role and permissions
+    const result = await pool.query(
+      'SELECT id, username, display_name, email, role, permissions, password_must_change, is_active FROM users WHERE id = $1',
+      [verified.id]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].is_active) {
+      res.clearCookie('token');
+      if (req.path.startsWith('/api/')) {
+        return res.status(401).json({ error: 'Invalid token' });
+      }
+      const returnPath = encodeURIComponent(req.originalUrl || req.path);
+      return res.redirect(`/login?return=${returnPath}`);
+    }
+
+    const user = result.rows[0];
+    req.user = {
+      id: user.id,
+      username: user.username,
+      displayName: user.display_name,
+      email: user.email,
+      role: user.role,
+      permissions: user.permissions,
+      passwordMustChange: user.password_must_change
+    };
+
     next();
   } catch (err) {
     res.clearCookie('token');
@@ -761,6 +798,10 @@ const verifyToken = (req, res, next) => {
     return res.redirect(`/login?return=${returnPath}`);
   }
 };
+
+// Attach permission helpers to all routes (applied after authentication)
+// This adds req.can(), req.hasRole(), etc. helpers to authenticated routes
+app.use(attachPermissions());
 
 // SECURITY: Content-Type validation middleware
 const validateContentType = (req, res, next) => {
@@ -884,6 +925,7 @@ app.post('/api/login', loginLimiter, validateContentType, async (req, res) => {
     res.json({
       success: true,
       username: user.username,
+      role: user.role,
       passwordMustChange: user.password_must_change === true
     });
   } catch (err) {
@@ -1007,6 +1049,255 @@ app.get('/api/verify', verifyToken, async (req, res) => {
   }
 });
 
+// User management API endpoints
+
+// Get all users (admin only)
+app.get('/api/users', verifyToken, requireAdmin(), async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        id, username, display_name, email, role,
+        last_login_at, last_login_ip,
+        failed_login_attempts, locked_until,
+        is_active, created_at
+      FROM users
+      WHERE is_active = true
+      ORDER BY created_at DESC
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Get users error:', err);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// Create new user (admin only)
+app.post('/api/users', verifyToken, requirePermission(PERMISSIONS.USERS_CREATE), validateContentType, doubleCsrfProtection, async (req, res) => {
+  try {
+    const { username, password, displayName, email, role } = req.body;
+
+    // Validation
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
+
+    // Validate username length
+    const usernameValidation = validateInputLength(username, 'Username', INPUT_LIMITS.username);
+    if (!usernameValidation.valid) {
+      return res.status(400).json({ error: usernameValidation.error });
+    }
+
+    // Validate password strength
+    const passwordValidation = validatePasswordStrength(password);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ error: passwordValidation.error });
+    }
+
+    // Validate role
+    const validRoles = ['super_admin', 'admin', 'power_user', 'user', 'read_only'];
+    if (role && !validRoles.includes(role)) {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+
+    // Check if current user can assign this role
+    const { canManageRole } = require('./config/permissions');
+    if (role && !canManageRole(req.user.role, role)) {
+      return res.status(403).json({
+        error: 'You cannot assign this role',
+        message: 'You do not have permission to create users with this role'
+      });
+    }
+
+    // Hash password
+    const hash = await bcrypt.hash(password, 10);
+
+    // Create user
+    const result = await pool.query(`
+      INSERT INTO users (username, password, display_name, email, role, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, username, display_name, email, role, created_at
+    `, [username, hash, displayName || username, email, role || 'user', req.user.id]);
+
+    res.status(201).json({
+      message: 'User created successfully',
+      user: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Create user error:', err);
+
+    // Handle unique constraint violation
+    if (err.code === '23505') {
+      if (err.constraint === 'users_username_key') {
+        return res.status(409).json({ error: 'Username already exists' });
+      }
+      if (err.constraint === 'users_email_key') {
+        return res.status(409).json({ error: 'Email already exists' });
+      }
+    }
+
+    res.status(500).json({ error: 'Failed to create user' });
+  }
+});
+
+// Update user (requires permission)
+app.put('/api/users/:id', verifyToken, requireCanManageUser(pool), validateContentType, doubleCsrfProtection, async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { displayName, email, role, isActive } = req.body;
+
+    // Build update query dynamically
+    const updates = [];
+    const values = [];
+    let paramCount = 1;
+
+    if (displayName !== undefined) {
+      updates.push(`display_name = $${paramCount++}`);
+      values.push(displayName);
+    }
+
+    if (email !== undefined) {
+      updates.push(`email = $${paramCount++}`);
+      values.push(email);
+    }
+
+    if (role !== undefined) {
+      // Validate role
+      const validRoles = ['super_admin', 'admin', 'power_user', 'user', 'read_only'];
+      if (!validRoles.includes(role)) {
+        return res.status(400).json({ error: 'Invalid role' });
+      }
+
+      // Check if current user can assign this role
+      const { canManageRole } = require('./config/permissions');
+      if (!canManageRole(req.user.role, role)) {
+        return res.status(403).json({
+          error: 'You cannot assign this role',
+          message: 'You do not have permission to assign this role'
+        });
+      }
+
+      updates.push(`role = $${paramCount++}`);
+      values.push(role);
+    }
+
+    if (isActive !== undefined) {
+      updates.push(`is_active = $${paramCount++}`);
+      values.push(isActive);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    // Add user ID to values
+    values.push(userId);
+
+    const result = await pool.query(`
+      UPDATE users
+      SET ${updates.join(', ')}, updated_at = NOW()
+      WHERE id = $${paramCount}
+      RETURNING id, username, display_name, email, role, is_active, updated_at
+    `, values);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      message: 'User updated successfully',
+      user: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Update user error:', err);
+
+    // Handle unique constraint violation
+    if (err.code === '23505') {
+      if (err.constraint === 'users_email_key') {
+        return res.status(409).json({ error: 'Email already exists' });
+      }
+    }
+
+    res.status(500).json({ error: 'Failed to update user' });
+  }
+});
+
+// Deactivate user (super admin only)
+app.delete('/api/users/:id', verifyToken, requireSuperAdmin(), doubleCsrfProtection, async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    // Prevent self-deletion
+    if (parseInt(userId) === req.user.id) {
+      return res.status(400).json({ error: 'Cannot delete your own account' });
+    }
+
+    // Soft delete (deactivate)
+    const result = await pool.query(`
+      UPDATE users
+      SET is_active = false, updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, username
+    `, [userId]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      message: 'User deactivated successfully',
+      user: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Delete user error:', err);
+    res.status(500).json({ error: 'Failed to delete user' });
+  }
+});
+
+// Reset user password (admin only)
+app.put('/api/users/:id/password', verifyToken, requireCanManageUser(pool), validateContentType, doubleCsrfProtection, async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { newPassword, requireChange } = req.body;
+
+    if (!newPassword) {
+      return res.status(400).json({ error: 'New password required' });
+    }
+
+    // Validate password strength
+    const passwordValidation = validatePasswordStrength(newPassword);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ error: passwordValidation.error });
+    }
+
+    // Hash password
+    const hash = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    const result = await pool.query(`
+      UPDATE users
+      SET password = $1,
+          password_must_change = $2,
+          password_changed_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $3
+      RETURNING id, username
+    `, [hash, requireChange || false, userId]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      message: 'Password reset successfully',
+      user: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ error: 'Failed to reset password' });
+  }
+});
+
 app.get('/api/server-info', verifyToken, (req, res) => {
   const os = require('os');
   const uptime = os.uptime();
@@ -1117,7 +1408,7 @@ app.get('/api/dashboard/categories', verifyToken, async (req, res) => {
 });
 
 // POST create new category
-app.post('/api/categories', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
+app.post('/api/categories', verifyToken, requirePermission(PERMISSIONS.CATEGORIES_CREATE), validateContentType, doubleCsrfProtection, async (req, res) => {
   const { id, name, display_order, color, icon } = req.body;
 
   if (!id || !name) {
@@ -1148,7 +1439,7 @@ app.post('/api/categories', verifyToken, validateContentType, doubleCsrfProtecti
 });
 
 // PUT update category
-app.put('/api/categories/:id', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
+app.put('/api/categories/:id', verifyToken, requirePermission(PERMISSIONS.CATEGORIES_EDIT), validateContentType, doubleCsrfProtection, async (req, res) => {
   const { id } = req.params;
   const { name, display_order, color, icon } = req.body;
 
@@ -1178,7 +1469,7 @@ app.put('/api/categories/:id', verifyToken, validateContentType, doubleCsrfProte
 });
 
 // DELETE category (with safety check)
-app.delete('/api/categories/:id', verifyToken, doubleCsrfProtection, async (req, res) => {
+app.delete('/api/categories/:id', verifyToken, requirePermission(PERMISSIONS.CATEGORIES_DELETE), doubleCsrfProtection, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -1263,7 +1554,7 @@ app.get('/api/services', verifyToken, async (req, res) => {
 });
 
 // POST create new service
-app.post('/api/services', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
+app.post('/api/services', verifyToken, requirePermission(PERMISSIONS.SERVICES_CREATE), validateContentType, doubleCsrfProtection, async (req, res) => {
   const { name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order } = req.body;
 
   if (!name || !path || !icon_url || !category || !service_type) {
@@ -1359,7 +1650,7 @@ app.post('/api/services', verifyToken, validateContentType, doubleCsrfProtection
 });
 
 // PUT update existing service
-app.put('/api/services/:id', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
+app.put('/api/services/:id', verifyToken, requirePermission(PERMISSIONS.SERVICES_EDIT), validateContentType, doubleCsrfProtection, async (req, res) => {
   const { id } = req.params;
   const { name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order, enabled } = req.body;
 
@@ -1465,7 +1756,7 @@ app.put('/api/services/:id', verifyToken, validateContentType, doubleCsrfProtect
 });
 
 // DELETE service (soft delete by setting enabled = false)
-app.delete('/api/services/:id', verifyToken, doubleCsrfProtection, async (req, res) => {
+app.delete('/api/services/:id', verifyToken, requirePermission(PERMISSIONS.SERVICES_DELETE), doubleCsrfProtection, async (req, res) => {
   const { id } = req.params;
 
   try {
