@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings - Dashboard</title>
+  <link rel="stylesheet" href="/css/admin.css">
+</head>
+<body>
+  <header>
+    <div class="container">
+      <div class="header-left">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 1v6m0 6v6m9-9h-6m-6 0H3"></path>
+        </svg>
+        <h1>Settings</h1>
+      </div>
+      <div class="header-right">
+        <div class="user-menu">
+          <button class="user-menu-btn" id="userMenuBtn">
+            <span id="username">Loading...</span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4 6l4 4 4-4z"/>
+            </svg>
+          </button>
+          <div class="user-menu-dropdown" id="userMenuDropdown">
+            <a href="/" class="menu-item">← Dashboard</a>
+            <a href="/admin" class="menu-item">Manage Services</a>
+            <div class="menu-divider"></div>
+            <button class="menu-item danger" id="logoutBtn">Logout</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <div class="settings-section">
+        <h2>Profile Settings</h2>
+        <form id="changeDisplayNameForm" style="max-width: 500px;">
+          <div class="form-group">
+            <label for="displayName">Display Name</label>
+            <input type="text" id="displayName" required minlength="2" maxlength="50" placeholder="Your display name">
+            <small style="display: block; margin-top: 4px; font-size: 12px; color: #8b949e;">This is how your name will appear in the dashboard</small>
+          </div>
+
+          <div id="nameMessage" class="message" style="display: none;"></div>
+
+          <div class="form-actions">
+            <button type="submit" class="primary-btn">Update Display Name</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="settings-section">
+        <h2>Change Password</h2>
+        <form id="changePasswordForm" style="max-width: 500px;">
+          <div class="form-group">
+            <label for="currentPassword">Current Password</label>
+            <input type="password" id="currentPassword" required autocomplete="current-password">
+          </div>
+
+          <div class="form-group">
+            <label for="newPassword">New Password</label>
+            <input type="password" id="newPassword" required autocomplete="new-password" minlength="8">
+          </div>
+
+          <div class="form-group">
+            <label for="confirmPassword">Confirm New Password</label>
+            <input type="password" id="confirmPassword" required autocomplete="new-password" minlength="8">
+          </div>
+
+          <div id="passwordMessage" class="message" style="display: none;"></div>
+
+          <div class="form-actions">
+            <button type="submit" class="primary-btn">Change Password</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container">
+      <div class="footer-links">
+        <a href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="/api/status" target="_blank" rel="noopener noreferrer">API Status</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/js/settings.js"></script>
+</body>
+</html>

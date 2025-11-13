@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Media Dashboard</title>
+  <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+<body>
+  <header>
+    <div class="container">
+      <div class="header-left">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <h1>Media Dashboard</h1>
+      </div>
+      <div class="header-right">
+        <div class="user-menu">
+          <button class="user-menu-btn" id="userMenuBtn">
+            <span id="username">Loading...</span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4 6l4 4 4-4z"/>
+            </svg>
+          </button>
+          <div class="user-menu-dropdown" id="userMenuDropdown">
+            <a href="/settings" class="menu-item">Settings</a>
+            <a href="/admin" class="menu-item">Manage Services</a>
+            <div class="menu-divider"></div>
+            <button class="menu-item danger" id="logoutBtn">Logout</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="server-metrics">
+      <div class="metric-item">
+        <span class="metric-label">Server</span>
+        <span class="metric-value" id="serverHostname">Loading...</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Uptime</span>
+        <span class="metric-value" id="serverUptime">Loading...</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">CPU</span>
+        <span class="metric-value" id="serverCpu">Loading...</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Memory</span>
+        <span class="metric-value" id="serverMemory">Loading...</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Services</span>
+        <span class="metric-value"><span id="onlineCount">0</span>/<span id="totalCount">0</span> Online</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Activity</span>
+        <span class="metric-value" id="totalActivity">0 active</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Last Update</span>
+        <span class="metric-value" id="lastUpdate">Just now</span>
+      </div>
+    </div>
+
+    <section class="category">
+      <h2>Content Management</h2>
+      <div class="services-grid" id="contentManagement"></div>
+    </section>
+
+    <section class="category">
+      <h2>Download Clients</h2>
+      <div class="services-grid" id="downloadClients"></div>
+    </section>
+
+    <section class="category">
+      <h2>Management & Analytics</h2>
+      <div class="services-grid" id="managementAnalytics"></div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <div class="footer-links">
+        <a href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="/api/status" target="_blank" rel="noopener noreferrer">API Status</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/js/dashboard.js"></script>
+</body>
+</html>

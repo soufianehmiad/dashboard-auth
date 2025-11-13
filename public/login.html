@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - Media Dashboard</title>
+  <link rel="stylesheet" href="/css/login.css">
+</head>
+<body>
+  <div class="login-wrapper">
+    <!-- Left side: SVG Illustration -->
+    <div class="login-left">
+      <div class="illustration">
+        <svg viewBox="0 0 600 500" xmlns="http://www.w3.org/2000/svg">
+          <!-- Server rack background -->
+          <rect x="150" y="50" width="300" height="400" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+
+          <!-- Server units with activity indicators -->
+          <!-- Unit 1: Sonarr/Radarr (Content Management) -->
+          <g>
+            <rect x="170" y="80" width="260" height="60" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+            <rect x="180" y="90" width="40" height="40" fill="#161b22"/>
+            <rect x="185" y="95" width="30" height="30" fill="#58a6ff" opacity="0.3"/>
+            <text x="240" y="115" font-family="monospace" font-size="14" fill="#c9d1d9" font-weight="600">CONTENT</text>
+            <circle cx="400" cy="110" r="6" fill="#3fb950"/>
+            <text x="235" y="130" font-family="monospace" font-size="10" fill="#8b949e">Sonarr • Radarr • Lidarr</text>
+          </g>
+
+          <!-- Unit 2: Download Clients -->
+          <g>
+            <rect x="170" y="160" width="260" height="60" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+            <rect x="180" y="170" width="40" height="40" fill="#161b22"/>
+            <rect x="185" y="175" width="30" height="30" fill="#238636" opacity="0.3"/>
+            <text x="240" y="195" font-family="monospace" font-size="14" fill="#c9d1d9" font-weight="600">DOWNLOAD</text>
+            <circle cx="400" cy="190" r="6" fill="#3fb950"/>
+            <text x="235" y="210" font-family="monospace" font-size="10" fill="#8b949e">qBittorrent • SABnzbd</text>
+          </g>
+
+          <!-- Unit 3: Indexers -->
+          <g>
+            <rect x="170" y="240" width="260" height="60" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+            <rect x="180" y="250" width="40" height="40" fill="#161b22"/>
+            <rect x="185" y="255" width="30" height="30" fill="#f85149" opacity="0.3"/>
+            <text x="240" y="275" font-family="monospace" font-size="14" fill="#c9d1d9" font-weight="600">INDEXERS</text>
+            <circle cx="400" cy="270" r="6" fill="#3fb950"/>
+            <text x="250" y="290" font-family="monospace" font-size="10" fill="#8b949e">Prowlarr • Jackett</text>
+          </g>
+
+          <!-- Unit 4: Analytics -->
+          <g>
+            <rect x="170" y="320" width="260" height="60" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+            <rect x="180" y="330" width="40" height="40" fill="#161b22"/>
+            <rect x="185" y="335" width="30" height="30" fill="#a371f7" opacity="0.3"/>
+            <text x="240" y="355" font-family="monospace" font-size="14" fill="#c9d1d9" font-weight="600">ANALYTICS</text>
+            <circle cx="400" cy="350" r="6" fill="#58a6ff"/>
+            <text x="250" y="370" font-family="monospace" font-size="10" fill="#8b949e">Tautulli • Plex</text>
+          </g>
+
+          <!-- Data flow lines (flat, no gradients) -->
+          <line x1="300" y1="140" x2="300" y2="160" stroke="#58a6ff" stroke-width="2"/>
+          <polygon points="295,155 300,160 305,155" fill="#58a6ff"/>
+
+          <line x1="300" y1="220" x2="300" y2="240" stroke="#58a6ff" stroke-width="2"/>
+          <polygon points="295,235 300,240 305,235" fill="#58a6ff"/>
+
+          <line x1="300" y1="300" x2="300" y2="320" stroke="#58a6ff" stroke-width="2"/>
+          <polygon points="295,315 300,320 305,315" fill="#58a6ff"/>
+
+          <!-- Side data indicators -->
+          <g>
+            <rect x="460" y="150" width="80" height="30" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+            <text x="470" y="168" font-family="monospace" font-size="10" fill="#3fb950">5 ACTIVE</text>
+            <text x="470" y="178" font-family="monospace" font-size="8" fill="#8b949e">downloads</text>
+          </g>
+
+          <g>
+            <rect x="460" y="260" width="80" height="30" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+            <text x="470" y="278" font-family="monospace" font-size="10" fill="#58a6ff">15 ONLINE</text>
+            <text x="470" y="288" font-family="monospace" font-size="8" fill="#8b949e">indexers</text>
+          </g>
+
+          <g>
+            <rect x="60" y="340" width="80" height="30" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+            <text x="70" y="358" font-family="monospace" font-size="10" fill="#a371f7">2 STREAMS</text>
+            <text x="70" y="368" font-family="monospace" font-size="8" fill="#8b949e">watching</text>
+          </g>
+
+          <!-- Network connection at bottom -->
+          <line x1="300" y1="380" x2="300" y2="420" stroke="#58a6ff" stroke-width="3"/>
+          <rect x="250" y="420" width="100" height="40" fill="#21262d" stroke="#30363d" stroke-width="2"/>
+          <text x="270" y="445" font-family="monospace" font-size="12" fill="#58a6ff" font-weight="600">NETWORK</text>
+
+          <!-- Connection lines spreading out -->
+          <line x1="250" y1="440" x2="100" y2="440" stroke="#30363d" stroke-width="2"/>
+          <line x1="350" y1="440" x2="500" y2="440" stroke="#30363d" stroke-width="2"/>
+          <circle cx="100" cy="440" r="5" fill="#30363d"/>
+          <circle cx="500" cy="440" r="5" fill="#30363d"/>
+        </svg>
+
+        <h2>Media Automation Platform</h2>
+        <p>Centralized control for your entire media stack</p>
+      </div>
+    </div>
+
+    <!-- Right side: Login form -->
+    <div class="login-right">
+      <div class="login-box">
+        <div class="logo">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <h1>Sign in to Dashboard</h1>
+        <form id="loginForm">
+          <div class="form-group">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" autocomplete="username" required autofocus>
+          </div>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" autocomplete="current-password" required>
+          </div>
+          <div id="error" class="error-message"></div>
+          <button type="submit" id="loginBtn">Sign in</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <script src="/js/login.js"></script>
+</body>
+</html>

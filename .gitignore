@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment variables
+.env
+
+# Database files
+*.db
+*.db-journal
+data/*.db
+data/*.db-journal
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# Core dumps
+core.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+.cache/
+
+# Claude Code internal files
+.claude/
