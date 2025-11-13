@@ -693,6 +693,7 @@ const { generateCsrfToken, doubleCsrfProtection } = doubleCsrf({
   },
   size: 64,
   ignoredMethods: ['GET', 'HEAD', 'OPTIONS'],
+  getCsrfTokenFromRequest: (req) => req.headers['x-csrf-token'],
   getSessionIdentifier: (req) => req.user?.id || 'anonymous'
 });
 
