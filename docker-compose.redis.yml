@@ -10,6 +10,7 @@ services:
       --appendfsync everysec
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-local-dev-redis-password}
 
     ports:
       - "6379:6379"  # Expose for development
