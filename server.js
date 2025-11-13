@@ -2090,6 +2090,10 @@ app.get('/settings', verifyToken, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'settings.html'));
 });
 
+app.get('/users', verifyToken, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'users.html'));
+});
+
 app.get('/nginx', verifyToken, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'nginx.html'));
 });
