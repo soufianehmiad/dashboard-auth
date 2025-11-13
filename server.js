@@ -1602,12 +1602,13 @@ app.post('/api/services', verifyToken, requirePermission(PERMISSIONS.SERVICES_CR
     }
   }
 
-  const validCategories = ['contentManagement', 'downloadClients', 'managementAnalytics'];
-  if (!validCategories.includes(category)) {
-    return res.status(400).json({ error: 'Invalid category' });
-  }
-
   try {
+    // Validate category exists in database
+    const categoryCheck = await pool.query('SELECT id FROM categories WHERE id = $1', [category]);
+    if (categoryCheck.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid category: category does not exist' });
+    }
+
     const result = await pool.query(
       'INSERT INTO services (name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id',
       [name, path, icon_url, category, service_type, proxy_target || null, api_url || null, api_key_env || null, display_order || 0]
@@ -1699,12 +1700,13 @@ app.put('/api/services/:id', verifyToken, requirePermission(PERMISSIONS.SERVICES
     }
   }
 
-  const validCategories = ['contentManagement', 'downloadClients', 'managementAnalytics'];
-  if (!validCategories.includes(category)) {
-    return res.status(400).json({ error: 'Invalid category' });
-  }
-
   try {
+    // Validate category exists in database
+    const categoryCheck = await pool.query('SELECT id FROM categories WHERE id = $1', [category]);
+    if (categoryCheck.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid category: category does not exist' });
+    }
+
     // First, get the old service info to handle nginx config changes
     const oldServiceResult = await pool.query('SELECT name, path, service_type FROM services WHERE id = $1', [id]);
 
