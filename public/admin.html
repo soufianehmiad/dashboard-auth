@@ -3,22 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Service Management - Dashboard</title>
+  <title>Service Management - MediaStack</title>
+  <link rel="stylesheet" href="/css/variables.css">
   <link rel="stylesheet" href="/css/admin.css">
 </head>
 <body>
   <header>
     <div class="container">
-      <div class="header-left">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="3" width="18" height="18" />
-          <line x1="9" y1="3" x2="9" y2="21" />
-          <line x1="15" y1="3" x2="15" y2="21" />
-          <line x1="3" y1="9" x2="21" y2="9" />
-          <line x1="3" y1="15" x2="21" y2="15" />
+      <a href="/" class="logo">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        <h1>Service Management</h1>
-      </div>
+        <span class="logo-text">MediaStack</span>
+      </a>
       <div class="header-right">
         <div class="user-menu">
           <button class="user-menu-btn" id="userMenuBtn">
@@ -28,10 +27,29 @@
             </svg>
           </button>
           <div class="user-menu-dropdown" id="userMenuDropdown">
-            <a href="/" class="menu-item">← Dashboard</a>
-            <a href="/settings" class="menu-item">Settings</a>
+            <a href="/" class="menu-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+              </svg>
+              Dashboard
+            </a>
+            <a href="/settings" class="menu-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+              Settings
+            </a>
             <div class="menu-divider"></div>
-            <button class="menu-item danger" id="logoutBtn">Logout</button>
+            <button class="menu-item danger" id="logoutBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
+              Logout
+            </button>
           </div>
         </div>
       </div>
@@ -40,12 +58,88 @@
 
   <main>
     <div class="container">
-      <div class="actions">
-        <button id="addServiceBtn" class="primary-btn">+ Add Service</button>
+      <h1 class="page-title">Service Management</h1>
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="services">Services</button>
+        <button class="tab-btn" data-tab="categories">Categories</button>
+        <button class="tab-btn" data-tab="locations">Proxy Locations</button>
+        <button class="tab-btn" data-tab="nginx">Nginx Config</button>
       </div>
 
-      <div class="services-list" id="servicesList">
-        <div class="loading">Loading services...</div>
+      <!-- Services Tab -->
+      <div id="servicesTab" class="tab-content active">
+        <div class="actions">
+          <button id="addServiceBtn" class="primary-btn">+ Add Service</button>
+        </div>
+
+        <div class="services-list" id="servicesList">
+          <div class="loading">Loading services...</div>
+        </div>
+      </div>
+
+      <!-- Categories Tab -->
+      <div id="categoriesTab" class="tab-content">
+        <div id="categoriesMessage" class="message" style="display: none; margin-bottom: 16px; padding: 12px; border-radius: 4px;"></div>
+
+        <div class="actions">
+          <button id="addCategoryBtn" class="primary-btn">+ Add Category</button>
+        </div>
+
+        <div class="services-list" id="categoriesList">
+          <div class="loading">Loading categories...</div>
+        </div>
+      </div>
+
+      <!-- Proxy Locations Tab -->
+      <div id="locationsTab" class="tab-content">
+        <div id="locationsMessage" class="message" style="display: none;"></div>
+
+        <p style="font-size: var(--font-sm); color: var(--color-text-secondary); margin-bottom: var(--space-base);">
+          These are proxy paths configured in nginx. Delete them here or create new ones in the Services tab.
+        </p>
+        <div id="locationsList" class="services-list">
+          <div class="loading">Loading proxy locations...</div>
+        </div>
+      </div>
+
+      <!-- Nginx Config Tab -->
+      <div id="nginxTab" class="tab-content">
+        <div id="nginxMessage" class="message" style="display: none; margin-bottom: 16px; padding: 12px; border-radius: 4px;"></div>
+
+        <div class="settings-section">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h2 style="margin: 0;">Full Configuration File</h2>
+            <div style="display: flex; gap: 8px;">
+              <button id="editBtn" class="secondary-btn">Edit</button>
+              <button id="saveBtn" class="primary-btn" style="display: none;">Save</button>
+              <button id="cancelNginxBtn" class="secondary-btn" style="display: none;">Cancel</button>
+              <button id="reloadBtn" class="secondary-btn">Reload</button>
+            </div>
+          </div>
+          <div style="position: relative;">
+            <textarea
+              id="configEditor"
+              readonly
+              style="width: 100%; min-height: 500px; font-family: 'Courier New', monospace; font-size: 13px; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; padding: 12px; resize: vertical; line-height: 1.5;"
+              placeholder="Loading configuration..."
+            ></textarea>
+            <div id="loadingOverlay" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(13, 17, 23, 0.8); display: flex; align-items: center; justify-content: center; font-size: 14px; color: #8b949e;">
+              Loading configuration...
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" style="margin-top: 16px;">
+          <h2>⚠️ Important Notes</h2>
+          <ul style="font-size: 13px; color: #8b949e; line-height: 1.8; margin-left: 20px;">
+            <li>Editing nginx configuration directly can break your proxy setup if syntax is incorrect</li>
+            <li>Always test your changes before saving - the system will validate syntax automatically</li>
+            <li>If nginx fails to reload, the previous working config will remain active</li>
+            <li>The root location block (<code style="background: #161b22; padding: 2px 4px;">location /</code>) must be last to avoid conflicts</li>
+            <li>Service-specific locations should be added before the root location block</li>
+          </ul>
+        </div>
       </div>
     </div>
   </main>
@@ -61,28 +155,59 @@
         <input type="hidden" id="serviceId">
 
         <div class="form-group">
-          <label for="serviceName">Name *</label>
-          <input type="text" id="serviceName" required placeholder="e.g., Sonarr">
+          <label for="serviceName">Service Name *</label>
+          <input type="text" id="serviceName" required placeholder="e.g., YouTube, Sonarr, Plex">
         </div>
 
         <div class="form-group">
-          <label for="servicePath">Path *</label>
-          <input type="text" id="servicePath" required placeholder="e.g., /sonarr">
+          <label for="serviceType">Service Type *</label>
+          <select id="serviceType" required>
+            <option value="">Select type...</option>
+            <option value="external">External URL (e.g., YouTube, Google)</option>
+            <option value="proxied">Proxied Service (requires nginx config)</option>
+          </select>
+        </div>
+
+        <div class="form-group" id="externalUrlGroup" style="display: none;">
+          <label for="externalUrl">External URL *</label>
+          <input type="url" id="externalUrl" placeholder="e.g., https://youtube.com">
+          <small class="form-helper">Full URL to external service</small>
+        </div>
+
+        <div class="form-group" id="proxyPathGroup" style="display: none;">
+          <label for="proxyPath">Proxy Path *</label>
+          <input type="text" id="proxyPath" placeholder="e.g., /sonarr">
+          <small class="form-helper">URL path (must start with /)</small>
+        </div>
+
+        <div class="form-group" id="proxyTargetGroup" style="display: none;">
+          <label for="proxyTarget">Backend URL *</label>
+          <input type="url" id="proxyTarget" placeholder="e.g., http://10.99.0.10:8989">
+          <small class="form-helper">Internal service URL (nginx will proxy to this)</small>
         </div>
 
         <div class="form-group">
           <label for="serviceIcon">Icon URL *</label>
-          <input type="url" id="serviceIcon" required placeholder="https://...">
+          <div class="icon-preview-container">
+            <div class="icon-preview-input">
+              <input type="text" id="serviceIcon" required placeholder="https://www.google.com/s2/favicons?domain=youtube.com&sz=128">
+              <small class="form-helper">
+                Tip: Use Google favicons: <code style="font-size: 10px; background: var(--color-bg-primary); padding: 2px 4px; border-radius: 2px;">https://www.google.com/s2/favicons?domain=DOMAIN&sz=128</code>
+              </small>
+            </div>
+            <div class="icon-preview-box">
+              <img id="iconPreview" src="" alt="">
+              <span id="iconPlaceholder">Preview</span>
+            </div>
+          </div>
         </div>
 
         <div class="form-group">
           <label for="serviceCategory">Category *</label>
           <select id="serviceCategory" required>
             <option value="">Select category...</option>
-            <option value="contentManagement">Content Management</option>
-            <option value="downloadClients">Download Clients</option>
-            <option value="managementAnalytics">Management & Analytics</option>
           </select>
+          <small class="form-helper">Manage categories in the Categories tab</small>
         </div>
 
         <div class="form-group">
@@ -108,6 +233,69 @@
     </div>
   </div>
 
+  <!-- Add/Edit Category Modal -->
+  <div id="categoryModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="categoryModalTitle">Add Category</h2>
+        <button class="close-btn" id="closeCategoryModal">&times;</button>
+      </div>
+      <form id="categoryForm">
+        <input type="hidden" id="categoryIdOriginal">
+
+        <div class="form-group">
+          <label for="categoryId">Category ID *</label>
+          <input type="text" id="categoryId" required placeholder="e.g., streaming" pattern="[a-zA-Z0-9_]+" title="Only letters, numbers, and underscores allowed">
+          <small class="form-helper">Used internally (cannot be changed after creation)</small>
+        </div>
+
+        <div class="form-group">
+          <label for="categoryName">Display Name *</label>
+          <input type="text" id="categoryName" required placeholder="e.g., Streaming Services">
+        </div>
+
+        <div class="form-group">
+          <label for="categoryIcon">Icon *</label>
+          <select id="categoryIcon" required>
+            <option value="film">🎬 Film (Content/Media)</option>
+            <option value="download">⬇️ Download</option>
+            <option value="chart">📊 Chart (Analytics)</option>
+            <option value="folder">📁 Folder</option>
+            <option value="server">🖥️ Server</option>
+            <option value="music">🎵 Music</option>
+            <option value="book">📚 Book</option>
+            <option value="globe">🌐 Globe (Network)</option>
+            <option value="database">💾 Database</option>
+            <option value="tv">📺 TV</option>
+          </select>
+          <small class="form-helper">Choose an icon for the category</small>
+        </div>
+
+        <div class="form-group">
+          <label for="categoryColor">Badge Color *</label>
+          <select id="categoryColor" required>
+            <option value="#58a6ff" style="background: #58a6ff; color: #ffffff;">Blue</option>
+            <option value="#238636" style="background: #238636; color: #ffffff;">Green</option>
+            <option value="#a371f7" style="background: #a371f7; color: #ffffff;">Purple</option>
+            <option value="#d29922" style="background: #d29922; color: #ffffff;">Orange</option>
+            <option value="#f85149" style="background: #f85149; color: #ffffff;">Red</option>
+          </select>
+          <small class="form-helper">Choose a color for the category badge</small>
+        </div>
+
+        <div class="form-group">
+          <label for="categoryOrder">Display Order</label>
+          <input type="number" id="categoryOrder" value="0" min="0">
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="secondary-btn" id="cancelCategoryBtn">Cancel</button>
+          <button type="submit" class="primary-btn">Save Category</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <footer>
     <div class="container">
       <div class="footer-links">
@@ -117,6 +305,6 @@
     </div>
   </footer>
 
-  <script src="/js/admin.js"></script>
+  <script src="/js/admin.js?v=8"></script>
 </body>
 </html>

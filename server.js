@@ -6,11 +6,163 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const axios = require('axios');
 const rateLimit = require('express-rate-limit');
+const fs = require('fs');
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
 
 const app = express();
 const PORT = 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret-key-in-production';
 const DB_PATH = path.join(__dirname, 'data', 'users.db');
+const NGINX_CONTAINER = 'arr-proxy';
+const NGINX_CONFIG_FILE = '/etc/nginx/conf.d/default.conf';
+const NGINX_CONFIG_HOST_PATH = '/opt/nginx/conf.d/default.conf';
+
+/**
+ * NGINX PROXY MANAGEMENT - arr-proxy Container
+ *
+ * This dashboard manages nginx running in the 'arr-proxy' container.
+ * Location blocks are added to /etc/nginx/conf.d/default.conf
+ *
+ * The dashboard container needs access to docker socket to manage nginx:
+ * - Volume: -v /var/run/docker.sock:/var/run/docker.sock
+ *
+ * Location blocks are inserted BEFORE the root "/" location so they
+ * take priority over dashboard routes.
+ */
+
+// Nginx management functions
+async function readNginxConfig() {
+  try {
+    const result = await execPromise(`docker exec ${NGINX_CONTAINER} cat ${NGINX_CONFIG_FILE}`);
+    return { success: true, content: result.stdout };
+  } catch (error) {
+    console.error('Error reading nginx config:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+async function writeNginxConfig(content) {
+  try {
+    // Write config directly to host path (nginx container mounts this as read-only)
+    fs.writeFileSync(NGINX_CONFIG_HOST_PATH, content, 'utf8');
+    console.log('Nginx config written successfully');
+    return { success: true };
+  } catch (error) {
+    console.error('Error writing nginx config:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+async function addNginxLocation(servicePath, proxyTarget, serviceName) {
+  if (!proxyTarget || !servicePath.startsWith('/')) {
+    return { success: false, error: 'Invalid proxy configuration' };
+  }
+
+  if (!proxyTarget.startsWith('http://') && !proxyTarget.startsWith('https://')) {
+    return { success: false, error: 'Proxy target must start with http:// or https://' };
+  }
+
+  // Read current nginx config
+  const readResult = await readNginxConfig();
+  if (!readResult.success) {
+    return readResult;
+  }
+
+  let config = readResult.content;
+
+  // Check if location already exists and remove it
+  const locationRegex = new RegExp(`\\s*# ${serviceName}[\\s\\S]*?location ${servicePath.replace(/\//g, '\\/')} \\{[\\s\\S]*?\\}`, 'g');
+  config = config.replace(locationRegex, '');
+
+  // Extract target host for Host header and ensure trailing slash for external domains
+  let targetHost = '$host';
+  let finalProxyTarget = proxyTarget;
+
+  try {
+    const url = new URL(proxyTarget);
+    targetHost = url.host;
+
+    // If the proxy target is just a domain (no path), add trailing slash
+    if (url.pathname === '' || url.pathname === '/') {
+      finalProxyTarget = proxyTarget.replace(/\/?$/, '/');
+    }
+  } catch (e) {
+    // If URL parsing fails, use $host
+  }
+
+  // Create new location block with redirect handling
+  const locationBlock = `
+    # ${serviceName}
+    location ${servicePath} {
+        proxy_pass ${finalProxyTarget};
+        proxy_set_header Host ${targetHost};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_ssl_server_name on;
+        proxy_redirect off;
+        proxy_buffering off;
+    }
+`;
+
+  // Insert before the root "/" location (dashboard must be last)
+  const rootLocationIndex = config.indexOf('location / {');
+  if (rootLocationIndex === -1) {
+    return { success: false, error: 'Could not find root location in nginx config' };
+  }
+
+  config = config.slice(0, rootLocationIndex) + locationBlock + '\n' + config.slice(rootLocationIndex);
+
+  // Write back
+  const writeResult = await writeNginxConfig(config);
+  if (!writeResult.success) {
+    return writeResult;
+  }
+
+  console.log(`Added nginx location for ${serviceName} at ${servicePath}`);
+  return { success: true };
+}
+
+async function removeNginxLocation(servicePath, serviceName) {
+  // Read current nginx config
+  const readResult = await readNginxConfig();
+  if (!readResult.success) {
+    return readResult;
+  }
+
+  let config = readResult.content;
+
+  // Remove the location block
+  const locationRegex = new RegExp(`\\s*# ${serviceName}[\\s\\S]*?location ${servicePath.replace(/\//g, '\\/')} \\{[\\s\\S]*?\\}`, 'g');
+  config = config.replace(locationRegex, '');
+
+  // Write back
+  const writeResult = await writeNginxConfig(config);
+  if (!writeResult.success) {
+    return writeResult;
+  }
+
+  console.log(`Removed nginx location for ${serviceName} at ${servicePath}`);
+  return { success: true };
+}
+
+async function reloadNginx() {
+  try {
+    // Test config first
+    const testResult = await execPromise(`docker exec ${NGINX_CONTAINER} nginx -t 2>&1`);
+    console.log('Nginx config test:', testResult.stdout || testResult.stderr);
+
+    // Reload nginx
+    await execPromise(`docker exec ${NGINX_CONTAINER} nginx -s reload 2>&1`);
+    console.log('Nginx reloaded successfully');
+    return { success: true, message: 'Nginx reloaded successfully' };
+  } catch (error) {
+    console.error('Error reloading nginx:', error.message);
+    return { success: false, error: error.message };
+  }
+}
 
 // Trust proxy for X-Forwarded-* headers (required for Cloudflare/nginx)
 app.set('trust proxy', 1);
@@ -102,6 +254,51 @@ db.serialize(() => {
     }
   });
 
+  // Create categories table
+  db.run(`CREATE TABLE IF NOT EXISTS categories (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    display_order INTEGER DEFAULT 0,
+    color TEXT DEFAULT '#58a6ff',
+    icon TEXT DEFAULT 'folder',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`, (err) => {
+    if (err) console.error('Error creating categories table:', err);
+
+    // Add color column if it doesn't exist (migration)
+    db.run(`ALTER TABLE categories ADD COLUMN color TEXT DEFAULT '#58a6ff'`, (err) => {
+      // Ignore error if column already exists
+      if (err && !err.message.includes('duplicate column')) {
+        console.error('Error adding color column:', err);
+      }
+    });
+
+    // Add icon column if it doesn't exist (migration)
+    db.run(`ALTER TABLE categories ADD COLUMN icon TEXT DEFAULT 'folder'`, (err) => {
+      // Ignore error if column already exists
+      if (err && !err.message.includes('duplicate column')) {
+        console.error('Error adding icon column:', err);
+      }
+    });
+
+    // Initialize default categories if table is empty
+    db.get("SELECT COUNT(*) as count FROM categories", (err, row) => {
+      if (!err && row.count === 0) {
+        const defaultCategories = [
+          { id: 'contentManagement', name: 'Content Management', display_order: 1, color: '#1f6feb', icon: 'film' },
+          { id: 'downloadClients', name: 'Download Clients', display_order: 2, color: '#238636', icon: 'download' },
+          { id: 'managementAnalytics', name: 'Management & Analytics', display_order: 3, color: '#a371f7', icon: 'chart' }
+        ];
+
+        defaultCategories.forEach(cat => {
+          db.run('INSERT INTO categories (id, name, display_order, color, icon) VALUES (?, ?, ?, ?, ?)',
+            [cat.id, cat.name, cat.display_order, cat.color, cat.icon]);
+        });
+        console.log('Initialized default categories');
+      }
+    });
+  });
+
   // Create services table for dynamic service management
   db.run(`CREATE TABLE IF NOT EXISTS services (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,12 +306,38 @@ db.serialize(() => {
     path TEXT NOT NULL UNIQUE,
     icon_url TEXT NOT NULL,
     category TEXT NOT NULL,
+    service_type TEXT DEFAULT 'external',
+    proxy_target TEXT,
     api_url TEXT,
     api_key_env TEXT,
     display_order INTEGER DEFAULT 0,
     enabled INTEGER DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
+  )`, (err) => {
+    if (err) console.error('Error creating services table:', err);
+
+    // Migration: Add service_type and proxy_target columns if they don't exist
+    db.all("PRAGMA table_info(services)", (err, columns) => {
+      if (!err) {
+        const hasServiceType = columns.some(col => col.name === 'service_type');
+        const hasProxyTarget = columns.some(col => col.name === 'proxy_target');
+
+        if (!hasServiceType) {
+          db.run("ALTER TABLE services ADD COLUMN service_type TEXT DEFAULT 'external'", (err) => {
+            if (err) console.error('Error adding service_type column:', err);
+            else console.log('Added service_type column to services table');
+          });
+        }
+
+        if (!hasProxyTarget) {
+          db.run("ALTER TABLE services ADD COLUMN proxy_target TEXT", (err) => {
+            if (err) console.error('Error adding proxy_target column:', err);
+            else console.log('Added proxy_target column to services table');
+          });
+        }
+      }
+    });
+  });
 
   db.get('SELECT username FROM users WHERE username = ?', ['admin'], (err, row) => {
     if (!row) {
@@ -375,6 +598,143 @@ app.get('/api/server-info', verifyToken, (req, res) => {
   });
 });
 
+// Category management API endpoints
+
+// GET all categories
+app.get('/api/categories', verifyToken, (req, res) => {
+  db.all('SELECT * FROM categories ORDER BY display_order', (err, rows) => {
+    if (err) {
+      console.error('Database error:', err);
+      return res.status(500).json({ error: 'Database error' });
+    }
+    res.json(rows);
+  });
+});
+
+// GET categories with services (for dashboard display)
+app.get('/api/dashboard/categories', verifyToken, (req, res) => {
+  // Get categories first
+  db.all('SELECT * FROM categories ORDER BY display_order', (err, categories) => {
+    if (err) {
+      console.error('Database error:', err);
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    // Get all services
+    db.all('SELECT * FROM services WHERE enabled = 1 ORDER BY category, display_order', (err, services) => {
+      if (err) {
+        console.error('Database error:', err);
+        return res.status(500).json({ error: 'Database error' });
+      }
+
+      // Group services by category and add to categories
+      const result = categories.map(cat => ({
+        ...cat,
+        services: services
+          .filter(s => s.category === cat.id)
+          .map(service => ({
+            id: service.id,
+            name: service.name,
+            path: service.path,
+            icon: service.icon_url,
+            category: service.category,
+            apiUrl: service.api_url,
+            apiKeyEnv: service.api_key_env,
+            displayOrder: service.display_order
+          }))
+      }));
+
+      res.json(result);
+    });
+  });
+});
+
+// POST create new category
+app.post('/api/categories', verifyToken, (req, res) => {
+  const { id, name, display_order, color, icon } = req.body;
+
+  if (!id || !name) {
+    return res.status(400).json({ error: 'Category ID and name are required' });
+  }
+
+  // Check if category ID already exists
+  db.get('SELECT id FROM categories WHERE id = ?', [id], (err, row) => {
+    if (err) {
+      return res.status(500).json({ error: 'Database error' });
+    }
+    if (row) {
+      return res.status(400).json({ error: 'Category ID already exists' });
+    }
+
+    db.run('INSERT INTO categories (id, name, display_order, color, icon) VALUES (?, ?, ?, ?, ?)',
+      [id, name, display_order || 0, color || '#58a6ff', icon || 'folder'],
+      function(err) {
+        if (err) {
+          console.error('Error creating category:', err);
+          return res.status(500).json({ error: 'Failed to create category' });
+        }
+        res.json({ success: true, id: this.lastID });
+      }
+    );
+  });
+});
+
+// PUT update category
+app.put('/api/categories/:id', verifyToken, (req, res) => {
+  const { id } = req.params;
+  const { name, display_order, color, icon } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ error: 'Category name is required' });
+  }
+
+  db.run('UPDATE categories SET name = ?, display_order = ?, color = ?, icon = ? WHERE id = ?',
+    [name, display_order || 0, color || '#58a6ff', icon || 'folder', id],
+    function(err) {
+      if (err) {
+        console.error('Error updating category:', err);
+        return res.status(500).json({ error: 'Failed to update category' });
+      }
+      if (this.changes === 0) {
+        return res.status(404).json({ error: 'Category not found' });
+      }
+      res.json({ success: true });
+    }
+  );
+});
+
+// DELETE category (with safety check)
+app.delete('/api/categories/:id', verifyToken, (req, res) => {
+  const { id } = req.params;
+
+  // Check if any services are using this category
+  db.get('SELECT COUNT(*) as count FROM services WHERE category = ? AND enabled = 1', [id], (err, row) => {
+    if (err) {
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    if (row.count > 0) {
+      return res.status(400).json({
+        error: 'Cannot delete category',
+        message: `This category has ${row.count} service(s) assigned to it. Please reassign or delete those services first.`,
+        serviceCount: row.count
+      });
+    }
+
+    // Safe to delete
+    db.run('DELETE FROM categories WHERE id = ?', [id], function(err) {
+      if (err) {
+        console.error('Error deleting category:', err);
+        return res.status(500).json({ error: 'Failed to delete category' });
+      }
+      if (this.changes === 0) {
+        return res.status(404).json({ error: 'Category not found' });
+      }
+      res.json({ success: true });
+    });
+  });
+});
+
 // Service management API endpoints
 
 // GET all services from database
@@ -398,6 +758,9 @@ app.get('/api/services', verifyToken, (req, res) => {
         name: service.name,
         path: service.path,
         icon: service.icon_url,
+        category: service.category,
+        serviceType: service.service_type,
+        proxyTarget: service.proxy_target,
         apiUrl: service.api_url,
         apiKeyEnv: service.api_key_env
       };
@@ -412,11 +775,15 @@ app.get('/api/services', verifyToken, (req, res) => {
 });
 
 // POST create new service
-app.post('/api/services', verifyToken, (req, res) => {
-  const { name, path, icon_url, category, api_url, api_key_env, display_order } = req.body;
+app.post('/api/services', verifyToken, async (req, res) => {
+  const { name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order } = req.body;
 
-  if (!name || !path || !icon_url || !category) {
-    return res.status(400).json({ error: 'Missing required fields: name, path, icon_url, category' });
+  if (!name || !path || !icon_url || !category || !service_type) {
+    return res.status(400).json({ error: 'Missing required fields: name, path, icon_url, category, service_type' });
+  }
+
+  if (service_type === 'proxied' && !proxy_target) {
+    return res.status(400).json({ error: 'Proxied services require proxy_target' });
   }
 
   const validCategories = ['contentManagement', 'downloadClients', 'managementAnalytics'];
@@ -425,9 +792,9 @@ app.post('/api/services', verifyToken, (req, res) => {
   }
 
   db.run(
-    'INSERT INTO services (name, path, icon_url, category, api_url, api_key_env, display_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [name, path, icon_url, category, api_url || null, api_key_env || null, display_order || 0],
-    function(err) {
+    'INSERT INTO services (name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [name, path, icon_url, category, service_type, proxy_target || null, api_url || null, api_key_env || null, display_order || 0],
+    async function(err) {
       if (err) {
         if (err.message.includes('UNIQUE constraint failed')) {
           return res.status(409).json({ error: 'Service with this path already exists' });
@@ -436,22 +803,47 @@ app.post('/api/services', verifyToken, (req, res) => {
         return res.status(500).json({ error: 'Database error' });
       }
 
+      // Create nginx config for proxied services
+      let nginxStatus = { configured: false, error: null, warning: null };
+      if (service_type === 'proxied') {
+        const nginxResult = await addNginxLocation(path, proxy_target, name);
+        if (!nginxResult.success) {
+          console.warn('Failed to add nginx location:', nginxResult.error);
+          nginxStatus.error = nginxResult.error;
+          nginxStatus.warning = 'Nginx config update failed. Service saved but proxy may not work. Check that dashboard container has access to docker socket.';
+        } else {
+          // Reload nginx
+          const reloadResult = await reloadNginx();
+          if (!reloadResult.success) {
+            nginxStatus.warning = 'Nginx location added but reload failed. You may need to reload nginx manually.';
+            nginxStatus.error = reloadResult.error;
+          } else {
+            nginxStatus.configured = true;
+          }
+        }
+      }
+
       res.json({
         success: true,
         id: this.lastID,
-        message: 'Service created successfully'
+        message: 'Service created successfully',
+        nginx: nginxStatus
       });
     }
   );
 });
 
 // PUT update existing service
-app.put('/api/services/:id', verifyToken, (req, res) => {
+app.put('/api/services/:id', verifyToken, async (req, res) => {
   const { id } = req.params;
-  const { name, path, icon_url, category, api_url, api_key_env, display_order, enabled } = req.body;
+  const { name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order, enabled } = req.body;
 
-  if (!name || !path || !icon_url || !category) {
-    return res.status(400).json({ error: 'Missing required fields: name, path, icon_url, category' });
+  if (!name || !path || !icon_url || !category || !service_type) {
+    return res.status(400).json({ error: 'Missing required fields: name, path, icon_url, category, service_type' });
+  }
+
+  if (service_type === 'proxied' && !proxy_target) {
+    return res.status(400).json({ error: 'Proxied services require proxy_target' });
   }
 
   const validCategories = ['contentManagement', 'downloadClients', 'managementAnalytics'];
@@ -459,14 +851,69 @@ app.put('/api/services/:id', verifyToken, (req, res) => {
     return res.status(400).json({ error: 'Invalid category' });
   }
 
-  db.run(
-    'UPDATE services SET name = ?, path = ?, icon_url = ?, category = ?, api_url = ?, api_key_env = ?, display_order = ?, enabled = ? WHERE id = ?',
-    [name, path, icon_url, category, api_url || null, api_key_env || null, display_order || 0, enabled !== undefined ? enabled : 1, id],
-    function(err) {
-      if (err) {
-        if (err.message.includes('UNIQUE constraint failed')) {
-          return res.status(409).json({ error: 'Service with this path already exists' });
+  // First, get the old service info to handle nginx config changes
+  db.get('SELECT name, path, service_type FROM services WHERE id = ?', [id], async (err, oldService) => {
+    if (err || !oldService) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+
+    // Delete old nginx location if it was proxied
+    if (oldService.service_type === 'proxied') {
+      await removeNginxLocation(oldService.path, oldService.name);
+    }
+
+    // Update the service
+    db.run(
+      'UPDATE services SET name = ?, path = ?, icon_url = ?, category = ?, service_type = ?, proxy_target = ?, api_url = ?, api_key_env = ?, display_order = ?, enabled = ? WHERE id = ?',
+      [name, path, icon_url, category, service_type, proxy_target || null, api_url || null, api_key_env || null, display_order || 0, enabled !== undefined ? enabled : 1, id],
+      async function(err) {
+        if (err) {
+          if (err.message.includes('UNIQUE constraint failed')) {
+            return res.status(409).json({ error: 'Service with this path already exists' });
+          }
+          console.error('Database error:', err);
+          return res.status(500).json({ error: 'Database error' });
         }
+
+        if (this.changes === 0) {
+          return res.status(404).json({ error: 'Service not found' });
+        }
+
+        // Add nginx location for proxied services
+        if (service_type === 'proxied') {
+          const nginxResult = await addNginxLocation(path, proxy_target, name);
+          if (!nginxResult.success) {
+            console.warn('Failed to add nginx location:', nginxResult.error);
+          } else {
+            await reloadNginx();
+          }
+        } else {
+          // Reload nginx to apply deletion
+          await reloadNginx();
+        }
+
+        res.json({
+          success: true,
+          message: 'Service updated successfully',
+          nginxConfigured: service_type === 'proxied'
+        });
+      }
+    );
+  });
+});
+
+// DELETE service (soft delete by setting enabled = 0)
+app.delete('/api/services/:id', verifyToken, async (req, res) => {
+  const { id } = req.params;
+
+  // First get the service info to remove nginx config
+  db.get('SELECT name, path, service_type FROM services WHERE id = ?', [id], async (err, service) => {
+    if (err || !service) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+
+    db.run('UPDATE services SET enabled = 0 WHERE id = ?', [id], async function(err) {
+      if (err) {
         console.error('Database error:', err);
         return res.status(500).json({ error: 'Database error' });
       }
@@ -475,33 +922,129 @@ app.put('/api/services/:id', verifyToken, (req, res) => {
         return res.status(404).json({ error: 'Service not found' });
       }
 
+      // Delete nginx config if it was proxied
+      if (service.service_type === 'proxied') {
+        const nginxResult = await removeNginxLocation(service.path, service.name);
+        if (nginxResult.success) {
+          await reloadNginx();
+        }
+      }
+
       res.json({
         success: true,
-        message: 'Service updated successfully'
+        message: 'Service deleted successfully'
       });
-    }
-  );
+    });
+  });
 });
 
-// DELETE service (soft delete by setting enabled = 0)
-app.delete('/api/services/:id', verifyToken, (req, res) => {
-  const { id } = req.params;
-
-  db.run('UPDATE services SET enabled = 0 WHERE id = ?', [id], function(err) {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ error: 'Database error' });
+// GET nginx location blocks
+app.get('/api/nginx/locations', verifyToken, async (req, res) => {
+  try {
+    const result = await readNginxConfig();
+    if (!result.success) {
+      return res.status(500).json({ error: 'Failed to read nginx config' });
     }
 
-    if (this.changes === 0) {
-      return res.status(404).json({ error: 'Service not found' });
+    const config = result.content;
+    const locations = [];
+
+    // Parse all location blocks (excluding root "/")
+    const locationRegex = /#\s*(.+?)\s*\n\s*location\s+(.+?)\s+\{[\s\S]*?proxy_pass\s+(.+?);/g;
+    let match;
+
+    while ((match = locationRegex.exec(config)) !== null) {
+      const name = match[1].trim();
+      const path = match[2].trim();
+      const target = match[3].trim();
+
+      // Skip the root location
+      if (path !== '/') {
+        locations.push({ name, path, target });
+      }
+    }
+
+    res.json({ success: true, locations });
+  } catch (error) {
+    console.error('Error parsing nginx locations:', error);
+    res.status(500).json({ error: 'Failed to parse nginx locations' });
+  }
+});
+
+// DELETE nginx location block
+app.delete('/api/nginx/locations', verifyToken, async (req, res) => {
+  try {
+    const { path, name } = req.body;
+
+    if (!path || !name) {
+      return res.status(400).json({ error: 'Path and name are required' });
+    }
+
+    const result = await removeNginxLocation(path, name);
+    if (!result.success) {
+      return res.status(500).json({ error: 'Failed to remove nginx location' });
+    }
+
+    const reloadResult = await reloadNginx();
+    if (!reloadResult.success) {
+      return res.status(500).json({ error: 'Nginx reload failed', details: reloadResult.error });
+    }
+
+    res.json({ success: true, message: 'Location removed successfully' });
+  } catch (error) {
+    console.error('Error removing nginx location:', error);
+    res.status(500).json({ error: 'Failed to remove nginx location' });
+  }
+});
+
+// GET nginx configuration
+app.get('/api/nginx/config', verifyToken, async (req, res) => {
+  try {
+    const result = await readNginxConfig();
+    if (result.success) {
+      res.json({ success: true, config: result.content });
+    } else {
+      res.status(500).json({ error: 'Failed to read nginx config', details: result.error });
+    }
+  } catch (error) {
+    console.error('Error reading nginx config:', error);
+    res.status(500).json({ error: 'Failed to read nginx config' });
+  }
+});
+
+// PUT nginx configuration
+app.put('/api/nginx/config', verifyToken, async (req, res) => {
+  try {
+    const { config } = req.body;
+
+    if (!config) {
+      return res.status(400).json({ error: 'Config content is required' });
+    }
+
+    // Write the new config
+    const writeResult = await writeNginxConfig(config);
+    if (!writeResult.success) {
+      return res.status(500).json({ error: 'Failed to write nginx config', details: writeResult.error });
+    }
+
+    // Test and reload nginx
+    const reloadResult = await reloadNginx();
+    if (!reloadResult.success) {
+      return res.status(500).json({
+        error: 'Config syntax error',
+        details: reloadResult.error,
+        message: 'Nginx config was updated but failed validation. Please fix the syntax errors.'
+      });
     }
 
     res.json({
       success: true,
-      message: 'Service deleted successfully'
+      message: 'Nginx config updated and reloaded successfully'
     });
-  });
+  } catch (error) {
+    console.error('Error updating nginx config:', error);
+    res.status(500).json({ error: 'Failed to update nginx config' });
+  }
 });
 
 app.get('/api/status', verifyToken, async (req, res) => {
@@ -659,6 +1202,10 @@ app.get('/admin', verifyToken, (req, res) => {
 
 app.get('/settings', verifyToken, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'settings.html'));
+});
+
+app.get('/nginx', verifyToken, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'nginx.html'));
 });
 
 // Catch-all: redirect to login

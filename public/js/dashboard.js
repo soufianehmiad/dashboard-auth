@@ -56,6 +56,25 @@ const FALLBACK_SERVICES = {
 // Current services (will be loaded from API or fallback)
 let SERVICES = FALLBACK_SERVICES;
 
+// Category icon SVG paths
+function getCategoryIconSVG(iconName, color = '#58a6ff') {
+  const icons = {
+    film: '<path d="M19.82 2H4.18C2.97 2 2 2.97 2 4.18v15.64C2 21.03 2.97 22 4.18 22h15.64c1.21 0 2.18-.97 2.18-2.18V4.18C22 2.97 21.03 2 19.82 2zM7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 7h5M17 17h5"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+    chart: '<path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+    folder: '<path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>',
+    server: '<rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
+    music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+    book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+    globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+    database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
+    tv: '<rect x="2" y="7" width="20" height="15" rx="2" ry="2"/><polyline points="17 2 12 7 7 2"/>'
+  };
+
+  const path = icons[iconName] || icons.folder;
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 20px; height: 20px; margin-right: 8px; vertical-align: middle;">${path}</svg>`;
+}
+
 async function checkAuth() {
   try {
     const response = await fetch('/api/verify', {
@@ -84,21 +103,21 @@ async function checkAuth() {
 
 async function loadServicesFromAPI() {
   try {
-    const response = await fetch('/api/services', {
+    const response = await fetch('/api/dashboard/categories', {
       credentials: 'same-origin'
     });
 
     if (!response.ok) {
-      console.warn('Failed to load services from API, using fallback');
+      console.warn('Failed to load categories from API, using fallback');
       return false;
     }
 
-    const servicesData = await response.json();
-    SERVICES = servicesData;
-    console.log('Services loaded from API');
+    const categoriesData = await response.json();
+    SERVICES = categoriesData;
+    console.log('Categories and services loaded from API');
     return true;
   } catch (err) {
-    console.warn('Failed to load services from API, using fallback:', err);
+    console.warn('Failed to load categories from API, using fallback:', err);
     return false;
   }
 }
@@ -126,20 +145,46 @@ function createServiceCard(service, status = 'loading', activity = null, activit
 }
 
 function renderServices() {
-  const categories = {
-    contentManagement: document.getElementById('contentManagement'),
-    downloadClients: document.getElementById('downloadClients'),
-    managementAnalytics: document.getElementById('managementAnalytics')
-  };
+  const mainContainer = document.querySelector('main.container');
 
-  Object.entries(SERVICES).forEach(([category, services]) => {
-    const container = categories[category];
-    container.innerHTML = ''; // Clear loading state
-    services.forEach(service => {
-      const card = createServiceCard(service);
-      container.appendChild(card);
-    });
+  // Get or create categories container
+  let categoriesContainer = mainContainer.querySelector('.categories-container');
+  if (!categoriesContainer) {
+    categoriesContainer = document.createElement('div');
+    categoriesContainer.className = 'categories-container';
+    mainContainer.appendChild(categoriesContainer);
+  }
+
+  // Remove all existing category sections
+  categoriesContainer.querySelectorAll('.category').forEach(section => section.remove());
+
+  // Create category sections dynamically
+  SERVICES.forEach(category => {
+    if (category.services && category.services.length > 0) {
+      const categoryIcon = category.icon || 'folder';
+      const categoryColor = category.color || '#8b949e';
+      const section = document.createElement('section');
+      section.className = 'category';
+      section.innerHTML = `
+        <h2 style="color: ${categoryColor};">${getCategoryIconSVG(categoryIcon, categoryColor)}${escapeHtml(category.name)}</h2>
+        <div class="services-grid" id="${category.id}"></div>
+      `;
+
+      categoriesContainer.appendChild(section);
+
+      const grid = section.querySelector('.services-grid');
+      category.services.forEach(service => {
+        const card = createServiceCard(service);
+        grid.appendChild(card);
+      });
+    }
   });
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 let previousState = null;

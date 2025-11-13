@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nginx Configuration - Dashboard</title>
+  <link rel="stylesheet" href="/css/admin.css">
+</head>
+<body>
+  <header>
+    <div class="container">
+      <div class="header-left">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="12" y1="18" x2="12" y2="12"></line>
+          <line x1="9" y1="15" x2="15" y2="15"></line>
+        </svg>
+        <h1>Nginx Configuration</h1>
+      </div>
+      <div class="header-right">
+        <div class="user-menu">
+          <button class="user-menu-btn" id="userMenuBtn">
+            <span id="username">Loading...</span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4 6l4 4 4-4z"/>
+            </svg>
+          </button>
+          <div class="user-menu-dropdown" id="userMenuDropdown">
+            <a href="/" class="menu-item">← Dashboard</a>
+            <a href="/admin" class="menu-item">Manage Services</a>
+            <a href="/settings" class="menu-item">Settings</a>
+            <div class="menu-divider"></div>
+            <button class="menu-item danger" id="logoutBtn">Logout</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <div class="actions">
+        <button id="editBtn" class="primary-btn">Edit Configuration</button>
+        <button id="saveBtn" class="primary-btn" style="display: none;">Save Changes</button>
+        <button id="cancelBtn" class="secondary-btn" style="display: none;">Cancel</button>
+        <button id="reloadBtn" class="secondary-btn">Reload Nginx</button>
+      </div>
+
+      <div id="message" class="message" style="display: none; margin-bottom: 16px; padding: 12px; border-radius: 4px;"></div>
+
+      <div class="settings-section" style="margin-top: 16px;">
+        <h2>Configuration File: /etc/nginx/conf.d/default.conf</h2>
+        <div style="position: relative;">
+          <textarea
+            id="configEditor"
+            readonly
+            style="width: 100%; min-height: 600px; font-family: 'Courier New', monospace; font-size: 13px; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; padding: 12px; resize: vertical; line-height: 1.5;"
+            placeholder="Loading configuration..."
+          ></textarea>
+          <div id="loadingOverlay" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(13, 17, 23, 0.8); display: flex; align-items: center; justify-content: center; font-size: 14px; color: #8b949e;">
+            Loading configuration...
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section" style="margin-top: 16px;">
+        <h2>⚠️ Important Notes</h2>
+        <ul style="font-size: 13px; color: #8b949e; line-height: 1.8; margin-left: 20px;">
+          <li>Editing nginx configuration directly can break your proxy setup if syntax is incorrect</li>
+          <li>Always test your changes before saving - the system will validate syntax automatically</li>
+          <li>If nginx fails to reload, the previous working config will remain active</li>
+          <li>The root location block (<code style="background: #161b22; padding: 2px 4px;">location /</code>) must be last to avoid conflicts</li>
+          <li>Service-specific locations should be added before the root location block</li>
+        </ul>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container">
+      <div class="footer-links">
+        <a href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="/api/status" target="_blank" rel="noopener noreferrer">API Status</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/js/nginx.js"></script>
+</body>
+</html>

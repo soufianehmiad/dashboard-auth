@@ -3,19 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Settings - Dashboard</title>
+  <title>Settings - MediaStack</title>
+  <link rel="stylesheet" href="/css/variables.css">
   <link rel="stylesheet" href="/css/admin.css">
 </head>
 <body>
   <header>
     <div class="container">
-      <div class="header-left">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M12 1v6m0 6v6m9-9h-6m-6 0H3"></path>
+      <a href="/" class="logo">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        <h1>Settings</h1>
-      </div>
+        <span class="logo-text">MediaStack</span>
+      </a>
       <div class="header-right">
         <div class="user-menu">
           <button class="user-menu-btn" id="userMenuBtn">
@@ -25,10 +27,31 @@
             </svg>
           </button>
           <div class="user-menu-dropdown" id="userMenuDropdown">
-            <a href="/" class="menu-item">← Dashboard</a>
-            <a href="/admin" class="menu-item">Manage Services</a>
+            <a href="/" class="menu-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+              </svg>
+              Dashboard
+            </a>
+            <a href="/admin" class="menu-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7"></rect>
+                <rect x="14" y="3" width="7" height="7"></rect>
+                <rect x="14" y="14" width="7" height="7"></rect>
+                <rect x="3" y="14" width="7" height="7"></rect>
+              </svg>
+              Manage Services
+            </a>
             <div class="menu-divider"></div>
-            <button class="menu-item danger" id="logoutBtn">Logout</button>
+            <button class="menu-item danger" id="logoutBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
+              Logout
+            </button>
           </div>
         </div>
       </div>
@@ -37,6 +60,7 @@
 
   <main>
     <div class="container">
+      <h1 class="page-title">Settings</h1>
       <div class="settings-grid">
         <div class="settings-section">
           <h2>Profile Settings</h2>
@@ -44,10 +68,10 @@
             <div class="form-group">
               <label for="displayName">Display Name</label>
               <input type="text" id="displayName" required minlength="2" maxlength="50" placeholder="Your display name">
-              <small style="display: block; margin-top: 4px; font-size: 11px; color: #8b949e;">How your name appears</small>
+              <small class="form-helper">How your name appears</small>
             </div>
 
-            <div id="nameMessage" class="message" style="display: none;"></div>
+            <div id="nameMessage" class="message" style="display: none; margin-bottom: 12px;"></div>
 
             <div class="form-actions">
               <button type="submit" class="primary-btn">Update</button>

@@ -143,7 +143,7 @@ button:disabled {
 }
 
 .error-message {
-  background: rgba(218, 54, 51, 0.15);
+  background: #1a1515;
   border: 1px solid #da3633;
   color: #ffa198;
   padding: 10px 12px;
