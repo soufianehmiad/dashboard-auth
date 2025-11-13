@@ -7,13 +7,34 @@ const path = require('path');
 const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const util = require('util');
-const execPromise = util.promisify(exec);
+const execFilePromise = util.promisify(execFile);
+const crypto = require('crypto');
 
 const app = express();
 const PORT = 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret-key-in-production';
+
+// SECURITY: Validate JWT_SECRET at startup
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET === 'change-this-secret-key-in-production') {
+  console.error('╔════════════════════════════════════════════════════════════╗');
+  console.error('║ CRITICAL ERROR: JWT_SECRET not configured                 ║');
+  console.error('║                                                            ║');
+  console.error('║ Set a secure random value in your .env file:              ║');
+  console.error('║   JWT_SECRET=<your-random-secret>                         ║');
+  console.error('║                                                            ║');
+  console.error('║ Generate one with:                                        ║');
+  console.error('║   openssl rand -base64 32                                 ║');
+  console.error('╚════════════════════════════════════════════════════════════╝');
+  process.exit(1);
+}
+
+if (JWT_SECRET.length < 32) {
+  console.error('ERROR: JWT_SECRET must be at least 32 characters long');
+  console.error('Generate a secure one with: openssl rand -base64 32');
+  process.exit(1);
+}
 const DB_PATH = path.join(__dirname, 'data', 'users.db');
 const NGINX_CONTAINER = 'arr-proxy';
 const NGINX_CONFIG_FILE = '/etc/nginx/conf.d/default.conf';
@@ -32,10 +53,49 @@ const NGINX_CONFIG_HOST_PATH = '/opt/nginx/conf.d/default.conf';
  * take priority over dashboard routes.
  */
 
+// SECURITY: Safe nginx location block removal (prevents ReDoS attacks)
+function removeNginxLocationBlock(config, serviceName, servicePath) {
+  const lines = config.split('\n');
+  const result = [];
+  let inTargetBlock = false;
+  let bracketCount = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Check if we found the comment marker for this service
+    if (line.includes(`# ${serviceName}`)) {
+      inTargetBlock = true;
+      continue; // Skip the comment line
+    }
+
+    if (inTargetBlock) {
+      // Count brackets to track block depth
+      const openBrackets = (line.match(/{/g) || []).length;
+      const closeBrackets = (line.match(/}/g) || []).length;
+      bracketCount += openBrackets - closeBrackets;
+
+      // If we've closed all brackets, we're done with this block
+      if (bracketCount <= 0) {
+        inTargetBlock = false;
+        bracketCount = 0;
+        continue; // Skip the closing bracket line
+      }
+      // Skip lines inside the target block
+      continue;
+    }
+
+    // Keep all other lines
+    result.push(line);
+  }
+
+  return result.join('\n');
+}
+
 // Nginx management functions
 async function readNginxConfig() {
   try {
-    const result = await execPromise(`docker exec ${NGINX_CONTAINER} cat ${NGINX_CONFIG_FILE}`);
+    const result = await execFilePromise('docker', ['exec', NGINX_CONTAINER, 'cat', NGINX_CONFIG_FILE]);
     return { success: true, content: result.stdout };
   } catch (error) {
     console.error('Error reading nginx config:', error.message);
@@ -45,9 +105,57 @@ async function readNginxConfig() {
 
 async function writeNginxConfig(content) {
   try {
-    // Write config directly to host path (nginx container mounts this as read-only)
-    fs.writeFileSync(NGINX_CONFIG_HOST_PATH, content, 'utf8');
-    console.log('Nginx config written successfully');
+    // SECURITY: Validate and sanitize nginx config before writing
+
+    // 1. Sanitize dangerous directives that could lead to code execution
+    const dangerous = [
+      'lua_code_block',
+      'lua_need_request_body',
+      'perl_modules',
+      'perl_require',
+      'perl_set',
+      'alias /etc',
+      'alias /var',
+      'alias /root',
+      'alias /proc',
+      'alias /sys'
+    ];
+
+    for (const pattern of dangerous) {
+      if (content.toLowerCase().includes(pattern.toLowerCase())) {
+        throw new Error(`Forbidden directive: ${pattern}`);
+      }
+    }
+
+    // 2. Create backup before writing
+    if (fs.existsSync(NGINX_CONFIG_HOST_PATH)) {
+      const backup = `${NGINX_CONFIG_HOST_PATH}.backup.${Date.now()}`;
+      fs.copyFileSync(NGINX_CONFIG_HOST_PATH, backup);
+
+      // Keep only last 5 backups
+      const dir = path.dirname(NGINX_CONFIG_HOST_PATH);
+      const backups = fs.readdirSync(dir)
+        .filter(f => f.includes('.backup.'))
+        .map(f => ({ name: f, path: path.join(dir, f), time: fs.statSync(path.join(dir, f)).mtime }))
+        .sort((a, b) => b.time - a.time);
+
+      // Delete old backups (keep newest 5)
+      backups.slice(5).forEach(backup => {
+        try {
+          fs.unlinkSync(backup.path);
+        } catch (err) {
+          console.warn('Failed to delete old backup:', backup.name);
+        }
+      });
+    }
+
+    // 3. Write config with restricted permissions (rw-r--r--)
+    fs.writeFileSync(NGINX_CONFIG_HOST_PATH, content, {
+      encoding: 'utf8',
+      mode: 0o644
+    });
+
+    console.log('Nginx config written successfully (validated & sanitized)');
     return { success: true };
   } catch (error) {
     console.error('Error writing nginx config:', error.message);
@@ -72,9 +180,8 @@ async function addNginxLocation(servicePath, proxyTarget, serviceName) {
 
   let config = readResult.content;
 
-  // Check if location already exists and remove it
-  const locationRegex = new RegExp(`\\s*# ${serviceName}[\\s\\S]*?location ${servicePath.replace(/\//g, '\\/')} \\{[\\s\\S]*?\\}`, 'g');
-  config = config.replace(locationRegex, '');
+  // SECURITY: Remove location if exists using safe string operations (prevents ReDoS)
+  config = removeNginxLocationBlock(config, serviceName, servicePath);
 
   // Extract target host for Host header and ensure trailing slash for external domains
   let targetHost = '$host';
@@ -134,9 +241,8 @@ async function removeNginxLocation(servicePath, serviceName) {
 
   let config = readResult.content;
 
-  // Remove the location block
-  const locationRegex = new RegExp(`\\s*# ${serviceName}[\\s\\S]*?location ${servicePath.replace(/\//g, '\\/')} \\{[\\s\\S]*?\\}`, 'g');
-  config = config.replace(locationRegex, '');
+  // SECURITY: Remove location using safe string operations (prevents ReDoS)
+  config = removeNginxLocationBlock(config, serviceName, servicePath);
 
   // Write back
   const writeResult = await writeNginxConfig(config);
@@ -151,11 +257,11 @@ async function removeNginxLocation(servicePath, serviceName) {
 async function reloadNginx() {
   try {
     // Test config first
-    const testResult = await execPromise(`docker exec ${NGINX_CONTAINER} nginx -t 2>&1`);
+    const testResult = await execFilePromise('docker', ['exec', NGINX_CONTAINER, 'nginx', '-t']);
     console.log('Nginx config test:', testResult.stdout || testResult.stderr);
 
     // Reload nginx
-    await execPromise(`docker exec ${NGINX_CONTAINER} nginx -s reload 2>&1`);
+    await execFilePromise('docker', ['exec', NGINX_CONTAINER, 'nginx', '-s', 'reload']);
     console.log('Nginx reloaded successfully');
     return { success: true, message: 'Nginx reloaded successfully' };
   } catch (error) {
