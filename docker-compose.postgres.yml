@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -14,18 +12,18 @@ services:
       TZ: UTC
 
     ports:
-      - "5432:5432"  # Expose for development (remove in production)
+      - "5432:5432"  # Expose for development
 
     volumes:
       # Persistent data
       - postgres_data:/var/lib/postgresql/data
       # Initialization scripts
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./database/complete-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       # Backups
       - ./database/backups:/backups
 
     networks:
-      - arr-network
+      - dashboard-network
 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dashboard_app -d dashboard"]
@@ -71,6 +69,6 @@ volumes:
     driver: local
 
 networks:
-  arr-network:
-    external: true
-    name: arr-proxy_arr-network
+  dashboard-network:
+    driver: bridge
+    name: dashboard-network
