@@ -375,7 +375,6 @@ async function createUser(userData) {
   } catch (err) {
     console.error('Create user error:', err);
     showError(err.message || 'Failed to create user');
-    showMessage('createUserMessage', err.message, true);
   }
 }
 
@@ -416,7 +415,6 @@ async function updateUser(userId, userData) {
   } catch (err) {
     console.error('Update user error:', err);
     showError(err.message || 'Failed to update user');
-    showMessage('editUserMessage', err.message, true);
   }
 }
 
@@ -452,7 +450,6 @@ async function resetPassword(userId, newPassword, requireChange) {
   } catch (err) {
     console.error('Reset password error:', err);
     showError(err.message || 'Failed to reset password');
-    showMessage('resetPasswordMessage', err.message, true);
   }
 }
 
@@ -486,7 +483,6 @@ async function deleteUser(userId) {
   } catch (err) {
     console.error('Delete user error:', err);
     showError(err.message || 'Failed to deactivate user');
-    showMessage('deleteUserMessage', err.message, true);
   }
 }
 
