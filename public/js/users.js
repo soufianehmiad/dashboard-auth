@@ -264,7 +264,7 @@ async function loadUsers() {
     renderUserTable(users);
   } catch (err) {
     console.error('Load users error:', err);
-    showGlobalMessage('Failed to load users', true);
+    showError('Failed to load users');
   }
 }
 
@@ -369,11 +369,12 @@ async function createUser(userData) {
       throw new Error(data.error || 'Failed to create user');
     }
 
-    showGlobalMessage('User created successfully', false);
+    showSuccess('User created successfully');
     closeModal('createUserModal');
     loadUsers();
   } catch (err) {
     console.error('Create user error:', err);
+    showError(err.message || 'Failed to create user');
     showMessage('createUserMessage', err.message, true);
   }
 }
@@ -409,11 +410,12 @@ async function updateUser(userId, userData) {
       throw new Error(data.error || 'Failed to update user');
     }
 
-    showGlobalMessage('User updated successfully', false);
+    showSuccess('User updated successfully');
     closeModal('editUserModal');
     loadUsers();
   } catch (err) {
     console.error('Update user error:', err);
+    showError(err.message || 'Failed to update user');
     showMessage('editUserMessage', err.message, true);
   }
 }
@@ -445,10 +447,11 @@ async function resetPassword(userId, newPassword, requireChange) {
       throw new Error(data.error || 'Failed to reset password');
     }
 
-    showGlobalMessage('Password reset successfully', false);
+    showSuccess('Password reset successfully');
     closeModal('resetPasswordModal');
   } catch (err) {
     console.error('Reset password error:', err);
+    showError(err.message || 'Failed to reset password');
     showMessage('resetPasswordMessage', err.message, true);
   }
 }
@@ -477,11 +480,12 @@ async function deleteUser(userId) {
       throw new Error(data.error || 'Failed to deactivate user');
     }
 
-    showGlobalMessage('User deactivated successfully', false);
+    showSuccess('User deactivated successfully');
     closeModal('deleteUserModal');
     loadUsers();
   } catch (err) {
     console.error('Delete user error:', err);
+    showError(err.message || 'Failed to deactivate user');
     showMessage('deleteUserMessage', err.message, true);
   }
 }
