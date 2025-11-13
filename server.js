@@ -693,7 +693,11 @@ const { generateCsrfToken, doubleCsrfProtection } = doubleCsrf({
   },
   size: 64,
   ignoredMethods: ['GET', 'HEAD', 'OPTIONS'],
-  getSessionIdentifier: (req) => req.user?.id || 'anonymous'
+  getSessionIdentifier: (req) => {
+    // Use JWT token as session identifier for consistency
+    // This ensures the same identifier is used when generating and validating tokens
+    return req.cookies.token || 'anonymous';
+  }
 });
 
 // Provide CSRF token to frontend
