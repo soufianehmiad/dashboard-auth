@@ -203,4 +203,4 @@ For support, please open an issue on GitHub or contact the maintainers.
 
 ---
 
-**Made with ❤️ by [Your Name]**
+**Made with ❤️ by Soufiane**
