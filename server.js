@@ -16,6 +16,8 @@ const execFilePromise = util.promisify(execFile);
 const crypto = require('crypto');
 const helmet = require('helmet');
 const { doubleCsrf } = require('csrf-csrf');
+const { createClient } = require('redis');
+const { RedisStore } = require('rate-limit-redis');
 
 const app = express();
 const PORT = 3000;
@@ -66,6 +68,134 @@ if (!pgConfig.password) {
   console.error('╚════════════════════════════════════════════════════════════╝');
   process.exit(1);
 }
+
+// Redis configuration
+const redisConfig = {
+  socket: {
+    host: process.env.REDIS_HOST || 'dashboard-redis',
+    port: parseInt(process.env.REDIS_PORT || '6379'),
+  },
+  password: process.env.REDIS_PASSWORD,
+};
+
+// Validate Redis password
+if (!redisConfig.password) {
+  console.error('╔════════════════════════════════════════════════════════════╗');
+  console.error('║ CRITICAL ERROR: REDIS_PASSWORD not configured             ║');
+  console.error('║                                                            ║');
+  console.error('║ Set a secure random value in your .env file:              ║');
+  console.error('║   REDIS_PASSWORD=<your-random-password>                   ║');
+  console.error('║                                                            ║');
+  console.error('║ Generate one with:                                        ║');
+  console.error('║   openssl rand -base64 32                                 ║');
+  console.error('╚════════════════════════════════════════════════════════════╝');
+  process.exit(1);
+}
+
+// Create Redis client
+const redisClient = createClient(redisConfig);
+
+redisClient.on('error', (err) => {
+  console.error('Redis Client Error:', err);
+});
+
+redisClient.on('connect', () => {
+  console.log('✓ Connected to Redis');
+});
+
+// Connect to Redis
+(async () => {
+  try {
+    await redisClient.connect();
+  } catch (err) {
+    console.error('╔════════════════════════════════════════════════════════════╗');
+    console.error('║ CRITICAL ERROR: Redis connection failed                   ║');
+    console.error('║                                                            ║');
+    console.error('║ Error:', err.message);
+    console.error('║                                                            ║');
+    console.error('║ Check that:                                               ║');
+    console.error('║ 1. Redis container is running                             ║');
+    console.error('║ 2. REDIS_HOST, REDIS_PORT are correct                     ║');
+    console.error('║ 3. REDIS_PASSWORD matches .env file                       ║');
+    console.error('╚════════════════════════════════════════════════════════════╝');
+    process.exit(1);
+  }
+})();
+
+// Redis cache helper functions
+const cache = {
+  /**
+   * Get cached value
+   * @param {string} key - Cache key
+   * @returns {Promise<any>} - Cached value or null
+   */
+  async get(key) {
+    try {
+      const value = await redisClient.get(key);
+      return value ? JSON.parse(value) : null;
+    } catch (err) {
+      console.error(`Cache get error for key ${key}:`, err);
+      return null; // Fail gracefully
+    }
+  },
+
+  /**
+   * Set cached value with TTL
+   * @param {string} key - Cache key
+   * @param {any} value - Value to cache
+   * @param {number} ttl - Time to live in seconds (default: 60)
+   */
+  async set(key, value, ttl = 60) {
+    try {
+      await redisClient.setEx(key, ttl, JSON.stringify(value));
+    } catch (err) {
+      console.error(`Cache set error for key ${key}:`, err);
+      // Fail gracefully - don't break the application if cache fails
+    }
+  },
+
+  /**
+   * Delete cached value
+   * @param {string} key - Cache key
+   */
+  async del(key) {
+    try {
+      await redisClient.del(key);
+    } catch (err) {
+      console.error(`Cache delete error for key ${key}:`, err);
+    }
+  },
+
+  /**
+   * Delete multiple keys matching a pattern
+   * @param {string} pattern - Key pattern (e.g., 'services:*')
+   */
+  async delPattern(pattern) {
+    try {
+      const keys = await redisClient.keys(pattern);
+      if (keys.length > 0) {
+        await redisClient.del(keys);
+      }
+    } catch (err) {
+      console.error(`Cache delete pattern error for ${pattern}:`, err);
+    }
+  },
+
+  /**
+   * Check if key exists
+   * @param {string} key - Cache key
+   * @returns {Promise<boolean>}
+   */
+  async exists(key) {
+    try {
+      const result = await redisClient.exists(key);
+      return result === 1;
+    } catch (err) {
+      console.error(`Cache exists error for key ${key}:`, err);
+      return false;
+    }
+  }
+};
 
 const NGINX_CONTAINER = 'arr-proxy';
 const NGINX_CONFIG_FILE = '/etc/nginx/conf.d/default.conf';
@@ -506,28 +636,32 @@ app.use(helmet({
 }));
 
 // SECURITY: Rate limiting for login endpoint to prevent brute force attacks
-// Use composite key (IP + User-Agent) to prevent bypass via IP spoofing
+// Use Redis-backed store for distributed rate limiting
 const loginLimiter = rateLimit({
+  store: new RedisStore({
+    sendCommand: (...args) => redisClient.sendCommand(args),
+    prefix: 'rl:login:',
+  }),
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts per window
-  message: { error: 'Too many login attempts, please try again in 15 minutes' },
+  max: 10, // 10 attempts per 15 minutes per IP
+  message: 'Too many login attempts from this IP, please try again after 15 minutes',
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: false,
-  handler: (req, res) => {
-    res.status(429).json({
-      error: 'Too many login attempts, please try again in 15 minutes'
-    });
-  }
+  skipFailedRequests: false,
 });
 
-// SECURITY: General API rate limiting
+// SECURITY: General API rate limiting with Redis store
 const apiLimiter = rateLimit({
+  store: new RedisStore({
+    sendCommand: (...args) => redisClient.sendCommand(args),
+    prefix: 'rl:api:',
+  }),
   windowMs: 1 * 60 * 1000, // 1 minute
-  max: 100, // 100 requests per minute
-  message: { error: 'Too many requests, please slow down' },
+  max: 100, // 100 requests per minute per IP
+  message: 'Too many requests from this IP, please try again later',
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
 });
 
 // Middleware
@@ -916,7 +1050,19 @@ app.get('/api/server-info', verifyToken, (req, res) => {
 // GET all categories
 app.get('/api/categories', verifyToken, async (req, res) => {
   try {
+    // Check cache first
+    const cacheKey = 'categories:all';
+    const cached = await cache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    // Cache miss - fetch from database
     const result = await pool.query('SELECT * FROM categories ORDER BY display_order');
+
+    // Store in cache for 5 minutes
+    await cache.set(cacheKey, result.rows, 300);
+
     res.json(result.rows);
   } catch (err) {
     console.error('Database error:', err);
@@ -927,7 +1073,14 @@ app.get('/api/categories', verifyToken, async (req, res) => {
 // GET categories with services (for dashboard display)
 app.get('/api/dashboard/categories', verifyToken, async (req, res) => {
   try {
-    // Get categories and services in parallel
+    // Check cache first
+    const cacheKey = 'dashboard:categories';
+    const cached = await cache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    // Cache miss - fetch from database (parallel queries)
     const [categoriesResult, servicesResult] = await Promise.all([
       pool.query('SELECT * FROM categories ORDER BY display_order'),
       pool.query('SELECT * FROM services WHERE enabled = true ORDER BY category, display_order')
@@ -952,6 +1105,9 @@ app.get('/api/dashboard/categories', verifyToken, async (req, res) => {
           displayOrder: service.display_order
         }))
     }));
+
+    // Store in cache for 2 minutes (shorter TTL for frequently changing data)
+    await cache.set(cacheKey, result, 120);
 
     res.json(result);
   } catch (err) {
@@ -980,6 +1136,10 @@ app.post('/api/categories', verifyToken, validateContentType, doubleCsrfProtecti
       [id, name, display_order || 0, color || '#58a6ff', icon || 'folder']
     );
 
+    // Invalidate caches
+    await cache.delPattern('categories:*');
+    await cache.delPattern('dashboard:*');
+
     res.json({ success: true, id: result.rows[0].id });
   } catch (err) {
     console.error('Error creating category:', err);
@@ -1005,6 +1165,10 @@ app.put('/api/categories/:id', verifyToken, validateContentType, doubleCsrfProte
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Category not found' });
     }
+
+    // Invalidate caches
+    await cache.delPattern('categories:*');
+    await cache.delPattern('dashboard:*');
 
     res.json({ success: true });
   } catch (err) {
@@ -1037,6 +1201,10 @@ app.delete('/api/categories/:id', verifyToken, doubleCsrfProtection, async (req,
       return res.status(404).json({ error: 'Category not found' });
     }
 
+    // Invalidate caches
+    await cache.delPattern('categories:*');
+    await cache.delPattern('dashboard:*');
+
     res.json({ success: true });
   } catch (err) {
     console.error('Error deleting category:', err);
@@ -1049,6 +1217,14 @@ app.delete('/api/categories/:id', verifyToken, doubleCsrfProtection, async (req,
 // GET all services from database
 app.get('/api/services', verifyToken, async (req, res) => {
   try {
+    // Check cache first
+    const cacheKey = 'services:all';
+    const cached = await cache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    // Cache miss - fetch from database
     const result = await pool.query('SELECT * FROM services WHERE enabled = true ORDER BY category, display_order');
 
     // Transform rows into frontend format
@@ -1075,6 +1251,9 @@ app.get('/api/services', verifyToken, async (req, res) => {
         services[service.category].push(serviceObj);
       }
     });
+
+    // Store in cache for 5 minutes
+    await cache.set(cacheKey, services, 300);
 
     res.json(services);
   } catch (err) {
@@ -1159,6 +1338,10 @@ app.post('/api/services', verifyToken, validateContentType, doubleCsrfProtection
         }
       }
     }
+
+    // Invalidate caches
+    await cache.delPattern('services:*');
+    await cache.delPattern('dashboard:*');
 
     res.json({
       success: true,
@@ -1263,6 +1446,10 @@ app.put('/api/services/:id', verifyToken, validateContentType, doubleCsrfProtect
       await reloadNginx();
     }
 
+    // Invalidate caches
+    await cache.delPattern('services:*');
+    await cache.delPattern('dashboard:*');
+
     res.json({
       success: true,
       message: 'Service updated successfully',
@@ -1304,6 +1491,10 @@ app.delete('/api/services/:id', verifyToken, doubleCsrfProtection, async (req, r
         await reloadNginx();
       }
     }
+
+    // Invalidate caches
+    await cache.delPattern('services:*');
+    await cache.delPattern('dashboard:*');
 
     res.json({
       success: true,
@@ -1484,6 +1675,13 @@ app.get('/api/status', verifyToken, async (req, res) => {
   ];
 
   const statusChecks = services.map(async (service) => {
+    // Check cache first (30 second TTL for status checks)
+    const cacheKey = `status:${service.name}`;
+    const cachedStatus = await cache.get(cacheKey);
+    if (cachedStatus) {
+      return cachedStatus;
+    }
+
     try {
       const config = {
         timeout: 3000,
@@ -1551,21 +1749,31 @@ app.get('/api/status', verifyToken, async (req, res) => {
         activity = null;
       }
 
-      return {
+      const statusResult = {
         name: service.name,
         path: service.path,
         status: 'online',
         activity: activity,
         activityType: activityType
       };
+
+      // Cache the result for 30 seconds
+      await cache.set(cacheKey, statusResult, 30);
+
+      return statusResult;
     } catch (err) {
-      return {
+      const statusResult = {
         name: service.name,
         path: service.path,
         status: 'offline',
         activity: null,
         activityType: 'idle'
       };
+
+      // Cache offline status for 30 seconds too
+      await cache.set(cacheKey, statusResult, 30);
+
+      return statusResult;
     }
   });
 
