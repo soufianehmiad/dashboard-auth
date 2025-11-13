@@ -37,47 +37,49 @@
 
   <main>
     <div class="container">
-      <div class="settings-section">
-        <h2>Profile Settings</h2>
-        <form id="changeDisplayNameForm" style="max-width: 500px;">
-          <div class="form-group">
-            <label for="displayName">Display Name</label>
-            <input type="text" id="displayName" required minlength="2" maxlength="50" placeholder="Your display name">
-            <small style="display: block; margin-top: 4px; font-size: 12px; color: #8b949e;">This is how your name will appear in the dashboard</small>
-          </div>
+      <div class="settings-grid">
+        <div class="settings-section">
+          <h2>Profile Settings</h2>
+          <form id="changeDisplayNameForm">
+            <div class="form-group">
+              <label for="displayName">Display Name</label>
+              <input type="text" id="displayName" required minlength="2" maxlength="50" placeholder="Your display name">
+              <small style="display: block; margin-top: 4px; font-size: 11px; color: #8b949e;">How your name appears</small>
+            </div>
 
-          <div id="nameMessage" class="message" style="display: none;"></div>
+            <div id="nameMessage" class="message" style="display: none;"></div>
 
-          <div class="form-actions">
-            <button type="submit" class="primary-btn">Update Display Name</button>
-          </div>
-        </form>
-      </div>
+            <div class="form-actions">
+              <button type="submit" class="primary-btn">Update</button>
+            </div>
+          </form>
+        </div>
 
-      <div class="settings-section">
-        <h2>Change Password</h2>
-        <form id="changePasswordForm" style="max-width: 500px;">
-          <div class="form-group">
-            <label for="currentPassword">Current Password</label>
-            <input type="password" id="currentPassword" required autocomplete="current-password">
-          </div>
+        <div class="settings-section">
+          <h2>Change Password</h2>
+          <form id="changePasswordForm">
+            <div class="form-group">
+              <label for="currentPassword">Current Password</label>
+              <input type="password" id="currentPassword" required autocomplete="current-password">
+            </div>
 
-          <div class="form-group">
-            <label for="newPassword">New Password</label>
-            <input type="password" id="newPassword" required autocomplete="new-password" minlength="8">
-          </div>
+            <div class="form-group">
+              <label for="newPassword">New Password</label>
+              <input type="password" id="newPassword" required autocomplete="new-password" minlength="8">
+            </div>
 
-          <div class="form-group">
-            <label for="confirmPassword">Confirm New Password</label>
-            <input type="password" id="confirmPassword" required autocomplete="new-password" minlength="8">
-          </div>
+            <div class="form-group">
+              <label for="confirmPassword">Confirm Password</label>
+              <input type="password" id="confirmPassword" required autocomplete="new-password" minlength="8">
+            </div>
 
-          <div id="passwordMessage" class="message" style="display: none;"></div>
+            <div id="passwordMessage" class="message" style="display: none;"></div>
 
-          <div class="form-actions">
-            <button type="submit" class="primary-btn">Change Password</button>
-          </div>
-        </form>
+            <div class="form-actions">
+              <button type="submit" class="primary-btn">Change Password</button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   </main>
