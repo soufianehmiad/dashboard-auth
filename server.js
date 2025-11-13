@@ -11,6 +11,8 @@ const { execFile } = require('child_process');
 const util = require('util');
 const execFilePromise = util.promisify(execFile);
 const crypto = require('crypto');
+const helmet = require('helmet');
+const { doubleCsrf } = require('csrf-csrf');
 
 const app = express();
 const PORT = 3000;
@@ -271,17 +273,37 @@ async function reloadNginx() {
 }
 
 // Trust proxy for X-Forwarded-* headers (required for Cloudflare/nginx)
-app.set('trust proxy', 1);
+// SECURITY: Only trust arr-proxy network, not arbitrary X-Forwarded-For headers
+app.set('trust proxy', ['172.19.0.0/16']);
 
-// Security: Add HSTS headers for HTTPS enforcement
-app.use((req, res, next) => {
-  if (req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https') {
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
-  }
-  next();
-});
+// SECURITY: Helmet - Comprehensive security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // Needed for inline scripts in dashboard
+      styleSrc: ["'self'", "'unsafe-inline'"], // Needed for inline styles
+      imgSrc: ["'self'", "data:", "https:", "http:"], // Allow external service icons
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"]
+    }
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  },
+  frameguard: { action: 'deny' },
+  noSniff: true,
+  xssFilter: true,
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
+}));
 
-// Security: Rate limiting for login endpoint to prevent brute force attacks
+// SECURITY: Rate limiting for login endpoint to prevent brute force attacks
+// Use composite key (IP + User-Agent) to prevent bypass via IP spoofing
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // 5 attempts per window
@@ -296,7 +318,7 @@ const loginLimiter = rateLimit({
   }
 });
 
-// Security: General API rate limiting
+// SECURITY: General API rate limiting
 const apiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
   max: 100, // 100 requests per minute
@@ -309,6 +331,27 @@ const apiLimiter = rateLimit({
 app.use(express.json());
 app.use(cookieParser());
 app.use('/api/', apiLimiter);
+
+// SECURITY: CSRF Protection for state-changing operations
+const csrfSecret = process.env.CSRF_SECRET || crypto.randomBytes(32).toString('hex');
+const { generateToken, doubleCsrfProtection } = doubleCsrf({
+  getSecret: () => csrfSecret,
+  cookieName: 'csrf-token',
+  cookieOptions: {
+    sameSite: 'lax',
+    path: '/',
+    secure: false, // Will be set to true when behind HTTPS proxy
+    httpOnly: true
+  },
+  size: 64,
+  ignoredMethods: ['GET', 'HEAD', 'OPTIONS']
+});
+
+// Provide CSRF token to frontend
+app.get('/api/csrf-token', (req, res) => {
+  const token = generateToken(req, res);
+  res.json({ token });
+});
 
 // Serve static files with no-cache for CSS/JS to ensure updates are seen immediately
 app.use(express.static('public', {
@@ -568,12 +611,12 @@ app.post('/api/login', loginLimiter, (req, res) => {
   });
 });
 
-app.post('/api/logout', (req, res) => {
+app.post('/api/logout', doubleCsrfProtection, (req, res) => {
   res.clearCookie('token', { path: '/' });
   res.json({ success: true });
 });
 
-app.post('/api/change-password', verifyToken, (req, res) => {
+app.post('/api/change-password', verifyToken, doubleCsrfProtection, (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword || !newPassword) {
@@ -618,7 +661,7 @@ app.post('/api/change-password', verifyToken, (req, res) => {
   });
 });
 
-app.post('/api/change-display-name', verifyToken, (req, res) => {
+app.post('/api/change-display-name', verifyToken, doubleCsrfProtection, (req, res) => {
   const { displayName } = req.body;
 
   if (!displayName || !displayName.trim()) {
@@ -756,7 +799,7 @@ app.get('/api/dashboard/categories', verifyToken, (req, res) => {
 });
 
 // POST create new category
-app.post('/api/categories', verifyToken, (req, res) => {
+app.post('/api/categories', verifyToken, doubleCsrfProtection, (req, res) => {
   const { id, name, display_order, color, icon } = req.body;
 
   if (!id || !name) {
@@ -786,7 +829,7 @@ app.post('/api/categories', verifyToken, (req, res) => {
 });
 
 // PUT update category
-app.put('/api/categories/:id', verifyToken, (req, res) => {
+app.put('/api/categories/:id', verifyToken, doubleCsrfProtection, (req, res) => {
   const { id } = req.params;
   const { name, display_order, color, icon } = req.body;
 
@@ -810,7 +853,7 @@ app.put('/api/categories/:id', verifyToken, (req, res) => {
 });
 
 // DELETE category (with safety check)
-app.delete('/api/categories/:id', verifyToken, (req, res) => {
+app.delete('/api/categories/:id', verifyToken, doubleCsrfProtection, (req, res) => {
   const { id } = req.params;
 
   // Check if any services are using this category
@@ -881,7 +924,7 @@ app.get('/api/services', verifyToken, (req, res) => {
 });
 
 // POST create new service
-app.post('/api/services', verifyToken, async (req, res) => {
+app.post('/api/services', verifyToken, doubleCsrfProtection, async (req, res) => {
   const { name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order } = req.body;
 
   if (!name || !path || !icon_url || !category || !service_type) {
@@ -940,7 +983,7 @@ app.post('/api/services', verifyToken, async (req, res) => {
 });
 
 // PUT update existing service
-app.put('/api/services/:id', verifyToken, async (req, res) => {
+app.put('/api/services/:id', verifyToken, doubleCsrfProtection, async (req, res) => {
   const { id } = req.params;
   const { name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order, enabled } = req.body;
 
@@ -1009,7 +1052,7 @@ app.put('/api/services/:id', verifyToken, async (req, res) => {
 });
 
 // DELETE service (soft delete by setting enabled = 0)
-app.delete('/api/services/:id', verifyToken, async (req, res) => {
+app.delete('/api/services/:id', verifyToken, doubleCsrfProtection, async (req, res) => {
   const { id } = req.params;
 
   // First get the service info to remove nginx config
@@ -1078,7 +1121,7 @@ app.get('/api/nginx/locations', verifyToken, async (req, res) => {
 });
 
 // DELETE nginx location block
-app.delete('/api/nginx/locations', verifyToken, async (req, res) => {
+app.delete('/api/nginx/locations', verifyToken, doubleCsrfProtection, async (req, res) => {
   try {
     const { path, name } = req.body;
 
@@ -1119,7 +1162,7 @@ app.get('/api/nginx/config', verifyToken, async (req, res) => {
 });
 
 // PUT nginx configuration
-app.put('/api/nginx/config', verifyToken, async (req, res) => {
+app.put('/api/nginx/config', verifyToken, doubleCsrfProtection, async (req, res) => {
   try {
     const { config } = req.body;
 
