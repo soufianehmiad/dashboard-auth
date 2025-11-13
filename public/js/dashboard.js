@@ -146,6 +146,15 @@ async function checkAuth() {
     const data = await response.json();
     if (data.authenticated) {
       document.getElementById('username').textContent = data.displayName || data.username;
+
+      // Show "Manage Users" link for admin users
+      if (data.role && ['super_admin', 'admin'].includes(data.role)) {
+        const manageUsersLink = document.getElementById('manageUsersLink');
+        if (manageUsersLink) {
+          manageUsersLink.style.display = 'flex';
+        }
+      }
+
       return true;
     } else {
       window.location.href = '/login';

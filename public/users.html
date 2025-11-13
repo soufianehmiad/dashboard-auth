@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>User Management - MediaStack</title>
+  <link rel="stylesheet" href="/css/variables.css">
+  <link rel="stylesheet" href="/css/users.css">
+</head>
+<body>
+  <header>
+    <div class="container">
+      <a href="/" class="logo">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="logo-text">MediaStack</span>
+      </a>
+      <div class="header-right">
+        <div class="user-menu">
+          <button class="user-menu-btn" id="userMenuBtn">
+            <span id="username">Loading...</span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4 6l4 4 4-4z"/>
+            </svg>
+          </button>
+          <div class="user-menu-dropdown" id="userMenuDropdown">
+            <a href="/" class="menu-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+              </svg>
+              Dashboard
+            </a>
+            <a href="/admin" class="menu-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7"></rect>
+                <rect x="14" y="3" width="7" height="7"></rect>
+                <rect x="14" y="14" width="7" height="7"></rect>
+                <rect x="3" y="14" width="7" height="7"></rect>
+              </svg>
+              Manage Services
+            </a>
+            <a href="/users" class="menu-item" id="manageUsersLink" style="display: none;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+              Manage Users
+            </a>
+            <a href="/settings" class="menu-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+              Settings
+            </a>
+            <div class="menu-divider"></div>
+            <button class="menu-item danger" id="logoutBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
+              Logout
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <h1 class="page-title">User Management</h1>
+
+      <div id="globalMessage" class="message" style="display: none;"></div>
+
+      <div class="actions">
+        <button id="createUserBtn" class="primary-btn" style="display: none;">+ Create User</button>
+      </div>
+
+      <div class="table-container">
+        <table class="users-table">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Display Name</th>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th>Last Login</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="users-tbody">
+            <tr>
+              <td colspan="7" class="loading">Loading users...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- Create User Modal -->
+  <div id="createUserModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Create User</h2>
+        <button class="close-btn" id="closeCreateModal">&times;</button>
+      </div>
+      <form id="createUserForm">
+        <div class="form-group">
+          <label for="createUsername">Username *</label>
+          <input type="text" id="createUsername" required minlength="3" maxlength="50" placeholder="username" autocomplete="off">
+          <small class="form-helper">3-50 characters, no spaces</small>
+        </div>
+
+        <div class="form-group">
+          <label for="createPassword">Password *</label>
+          <input type="password" id="createPassword" required minlength="8" placeholder="••••••••" autocomplete="new-password">
+          <small class="form-helper">Minimum 8 characters</small>
+        </div>
+
+        <div class="form-group">
+          <label for="createDisplayName">Display Name</label>
+          <input type="text" id="createDisplayName" maxlength="100" placeholder="John Doe" autocomplete="off">
+          <small class="form-helper">Optional friendly name</small>
+        </div>
+
+        <div class="form-group">
+          <label for="createEmail">Email</label>
+          <input type="email" id="createEmail" maxlength="255" placeholder="user@example.com" autocomplete="off">
+          <small class="form-helper">Optional email address</small>
+        </div>
+
+        <div class="form-group">
+          <label for="createRole">Role *</label>
+          <select id="createRole" required>
+            <option value="">Select role...</option>
+          </select>
+        </div>
+
+        <div id="createUserMessage" class="message" style="display: none;"></div>
+
+        <div class="form-actions">
+          <button type="button" class="secondary-btn" id="cancelCreateBtn">Cancel</button>
+          <button type="submit" class="primary-btn">Create User</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit User Modal -->
+  <div id="editUserModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Edit User</h2>
+        <button class="close-btn" id="closeEditModal">&times;</button>
+      </div>
+      <form id="editUserForm">
+        <input type="hidden" id="editUserId">
+
+        <div class="form-group">
+          <label for="editUsername">Username</label>
+          <input type="text" id="editUsername" disabled>
+          <small class="form-helper">Username cannot be changed</small>
+        </div>
+
+        <div class="form-group">
+          <label for="editDisplayName">Display Name</label>
+          <input type="text" id="editDisplayName" maxlength="100" placeholder="John Doe">
+        </div>
+
+        <div class="form-group">
+          <label for="editEmail">Email</label>
+          <input type="email" id="editEmail" maxlength="255" placeholder="user@example.com">
+        </div>
+
+        <div class="form-group">
+          <label for="editRole">Role *</label>
+          <select id="editRole" required>
+            <option value="">Select role...</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="editActive">Status</label>
+          <select id="editActive" required>
+            <option value="1">Active</option>
+            <option value="0">Inactive</option>
+          </select>
+        </div>
+
+        <div id="editUserMessage" class="message" style="display: none;"></div>
+
+        <div class="form-actions">
+          <button type="button" class="secondary-btn" id="cancelEditBtn">Cancel</button>
+          <button type="submit" class="primary-btn">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Reset Password Modal -->
+  <div id="resetPasswordModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Reset Password</h2>
+        <button class="close-btn" id="closeResetModal">&times;</button>
+      </div>
+      <form id="resetPasswordForm">
+        <input type="hidden" id="resetUserId">
+
+        <div class="form-group">
+          <label for="resetUsername">Username</label>
+          <input type="text" id="resetUsername" disabled>
+        </div>
+
+        <div class="form-group">
+          <label for="resetNewPassword">New Password *</label>
+          <input type="password" id="resetNewPassword" required minlength="8" placeholder="••••••••" autocomplete="new-password">
+          <small class="form-helper">Minimum 8 characters</small>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="resetRequireChange">
+            <span>Require password change on next login</span>
+          </label>
+        </div>
+
+        <div id="resetPasswordMessage" class="message" style="display: none;"></div>
+
+        <div class="form-actions">
+          <button type="button" class="secondary-btn" id="cancelResetBtn">Cancel</button>
+          <button type="submit" class="primary-btn">Reset Password</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Delete User Modal -->
+  <div id="deleteUserModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Deactivate User</h2>
+        <button class="close-btn" id="closeDeleteModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="deleteUserId">
+        <p id="deleteUserText" class="delete-warning"></p>
+        <p style="margin-top: 12px; font-size: 13px; color: var(--color-text-secondary);">This will deactivate the user account. They will no longer be able to log in.</p>
+
+        <div id="deleteUserMessage" class="message" style="display: none;"></div>
+
+        <div class="form-actions" style="margin-top: 24px;">
+          <button type="button" class="secondary-btn" id="cancelDeleteBtn">Cancel</button>
+          <button type="button" class="danger-btn" id="confirmDeleteBtn">Deactivate User</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="container">
+      <div class="footer-links">
+        <a href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="/api/status" target="_blank" rel="noopener noreferrer">API Status</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/js/users.js"></script>
+</body>
+</html>

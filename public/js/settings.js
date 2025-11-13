@@ -79,6 +79,15 @@ async function checkAuth() {
       document.getElementById('username').textContent = data.displayName || data.username;
       // Set current display name in form
       document.getElementById('displayName').value = data.displayName || data.username;
+
+      // Show "Manage Users" link for admin users
+      if (data.role && ['super_admin', 'admin'].includes(data.role)) {
+        const manageUsersLink = document.getElementById('manageUsersLink');
+        if (manageUsersLink) {
+          manageUsersLink.style.display = 'flex';
+        }
+      }
+
       return true;
     } else {
       window.location.href = '/login';

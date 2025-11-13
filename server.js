@@ -1027,9 +1027,9 @@ app.post('/api/change-display-name', verifyToken, validateContentType, doubleCsr
 });
 
 app.get('/api/verify', verifyToken, async (req, res) => {
-  // Fetch user details including display_name and password_must_change
+  // Fetch user details including display_name, role, and password_must_change
   try {
-    const result = await pool.query('SELECT username, display_name, password_must_change FROM users WHERE id = $1', [req.user.id]);
+    const result = await pool.query('SELECT username, display_name, role, password_must_change FROM users WHERE id = $1', [req.user.id]);
 
     if (result.rows.length === 0) {
       return res.status(500).json({ error: 'Failed to fetch user details' });
@@ -1041,6 +1041,7 @@ app.get('/api/verify', verifyToken, async (req, res) => {
       authenticated: true,
       username: user.username,
       displayName: user.display_name || user.username,
+      role: user.role,
       passwordMustChange: user.password_must_change === true
     });
   } catch (err) {
