@@ -1,4 +1,66 @@
 let currentUser = null;
+let csrfToken = null; // CSRF token for API requests
+
+// SECURITY: Fetch CSRF token from server
+async function fetchCsrfToken() {
+  try {
+    const response = await fetch('/api/csrf-token', {
+      credentials: 'same-origin'
+    });
+
+    if (!response.ok) {
+      console.error('Failed to fetch CSRF token');
+      return null;
+    }
+
+    const data = await response.json();
+    csrfToken = data.token;
+    return csrfToken;
+  } catch (err) {
+    console.error('CSRF token fetch error:', err);
+    return null;
+  }
+}
+
+// SECURITY: Make authenticated API request with CSRF token
+async function authenticatedFetch(url, options = {}) {
+  // For POST, PUT, DELETE requests, add CSRF token
+  if (options.method && ['POST', 'PUT', 'DELETE'].includes(options.method.toUpperCase())) {
+    // Ensure we have a CSRF token
+    if (!csrfToken) {
+      await fetchCsrfToken();
+    }
+
+    // Add CSRF token to headers
+    options.headers = {
+      ...options.headers,
+      'x-csrf-token': csrfToken
+    };
+  }
+
+  // Make the request
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    ...options
+  });
+
+  // If 403 (CSRF validation failed), refresh token and retry once
+  if (response.status === 403) {
+    console.log('CSRF token expired, refreshing...');
+    await fetchCsrfToken();
+
+    if (options.method && ['POST', 'PUT', 'DELETE'].includes(options.method.toUpperCase())) {
+      options.headers = {
+        ...options.headers,
+        'x-csrf-token': csrfToken
+      };
+    }
+
+    return fetch(url, { credentials: 'same-origin', ...options });
+  }
+
+  return response;
+}
 
 async function checkAuth() {
   try {
@@ -56,12 +118,11 @@ document.getElementById('changeDisplayNameForm').addEventListener('submit', asyn
   }
 
   try {
-    const response = await fetch('/api/change-display-name', {
+    const response = await authenticatedFetch('/api/change-display-name', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      credentials: 'same-origin',
       body: JSON.stringify({ displayName })
     });
 
@@ -99,12 +160,11 @@ document.getElementById('changePasswordForm').addEventListener('submit', async (
   }
 
   try {
-    const response = await fetch('/api/change-password', {
+    const response = await authenticatedFetch('/api/change-password', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      credentials: 'same-origin',
       body: JSON.stringify({
         currentPassword,
         newPassword
@@ -146,9 +206,8 @@ document.getElementById('logoutBtn').addEventListener('click', async (e) => {
   e.preventDefault();
 
   try {
-    await fetch('/api/logout', {
-      method: 'POST',
-      credentials: 'same-origin'
+    await authenticatedFetch('/api/logout', {
+      method: 'POST'
     });
   } catch (err) {
     console.error('Logout error:', err);
@@ -160,6 +219,9 @@ document.getElementById('logoutBtn').addEventListener('click', async (e) => {
 async function init() {
   const authenticated = await checkAuth();
   if (!authenticated) return;
+
+  // SECURITY: Fetch CSRF token on page load
+  await fetchCsrfToken();
 
   // Security: Check if password change is required
   const urlParams = new URLSearchParams(window.location.search);

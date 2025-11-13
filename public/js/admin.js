@@ -1,8 +1,70 @@
 let currentServices = [];
 let editingServiceId = null;
+let csrfToken = null; // CSRF token for API requests
 
 // Icon preview elements (will be initialized after DOM loads)
 let iconInput, iconPreview, iconPlaceholder, pathInput;
+
+// SECURITY: Fetch CSRF token from server
+async function fetchCsrfToken() {
+  try {
+    const response = await fetch('/api/csrf-token', {
+      credentials: 'same-origin'
+    });
+
+    if (!response.ok) {
+      console.error('Failed to fetch CSRF token');
+      return null;
+    }
+
+    const data = await response.json();
+    csrfToken = data.token;
+    return csrfToken;
+  } catch (err) {
+    console.error('CSRF token fetch error:', err);
+    return null;
+  }
+}
+
+// SECURITY: Make authenticated API request with CSRF token
+async function authenticatedFetch(url, options = {}) {
+  // For POST, PUT, DELETE requests, add CSRF token
+  if (options.method && ['POST', 'PUT', 'DELETE'].includes(options.method.toUpperCase())) {
+    // Ensure we have a CSRF token
+    if (!csrfToken) {
+      await fetchCsrfToken();
+    }
+
+    // Add CSRF token to headers
+    options.headers = {
+      ...options.headers,
+      'x-csrf-token': csrfToken
+    };
+  }
+
+  // Make the request
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    ...options
+  });
+
+  // If 403 (CSRF validation failed), refresh token and retry once
+  if (response.status === 403) {
+    console.log('CSRF token expired, refreshing...');
+    await fetchCsrfToken();
+
+    if (options.method && ['POST', 'PUT', 'DELETE'].includes(options.method.toUpperCase())) {
+      options.headers = {
+        ...options.headers,
+        'x-csrf-token': csrfToken
+      };
+    }
+
+    return fetch(url, { credentials: 'same-origin', ...options });
+  }
+
+  return response;
+}
 
 // Category icon SVG paths
 function getCategoryIconSVG(iconName, color = '#58a6ff') {
@@ -260,12 +322,11 @@ async function saveService(event) {
 
     const method = editingServiceId ? 'PUT' : 'POST';
 
-    const response = await fetch(url, {
+    const response = await authenticatedFetch(url, {
       method: method,
       headers: {
         'Content-Type': 'application/json'
       },
-      credentials: 'same-origin',
       body: JSON.stringify(formData)
     });
 
@@ -299,7 +360,7 @@ async function deleteService(id, name) {
   }
 
   try {
-    const response = await fetch(`/api/services/${id}`, {
+    const response = await authenticatedFetch(`/api/services/${id}`, {
       method: 'DELETE',
       credentials: 'same-origin'
     });
@@ -434,7 +495,7 @@ document.getElementById('logoutBtn').addEventListener('click', async (e) => {
   e.preventDefault();
 
   try {
-    await fetch('/api/logout', {
+    await authenticatedFetch('/api/logout', {
       method: 'POST',
       credentials: 'same-origin'
     });
@@ -521,7 +582,7 @@ async function deleteNginxLocation(location) {
   }
 
   try {
-    const response = await fetch('/api/nginx/locations', {
+    const response = await authenticatedFetch('/api/nginx/locations', {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json'
@@ -635,12 +696,11 @@ async function saveNginxConfig() {
   }
 
   try {
-    const response = await fetch('/api/nginx/config', {
+    const response = await authenticatedFetch('/api/nginx/config', {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json'
       },
-      credentials: 'same-origin',
       body: JSON.stringify({ config: newConfig })
     });
 
@@ -666,12 +726,11 @@ async function reloadNginx() {
   }
 
   try {
-    const response = await fetch('/api/nginx/config', {
+    const response = await authenticatedFetch('/api/nginx/config', {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json'
       },
-      credentials: 'same-origin',
       body: JSON.stringify({ config: originalConfig })
     });
 
@@ -852,10 +911,9 @@ async function saveCategory() {
   const url = isEdit ? `/api/categories/${originalId}` : '/api/categories';
 
   try {
-    const response = await fetch(url, {
+    const response = await authenticatedFetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
       body: JSON.stringify({ id, name, display_order, color, icon })
     });
 
@@ -881,9 +939,8 @@ async function deleteCategory(category) {
   }
 
   try {
-    const response = await fetch(`/api/categories/${category.id}`, {
-      method: 'DELETE',
-      credentials: 'same-origin'
+    const response = await authenticatedFetch(`/api/categories/${category.id}`, {
+      method: 'DELETE'
     });
 
     const data = await response.json();
@@ -950,6 +1007,9 @@ document.getElementById('reloadBtn').addEventListener('click', reloadNginx);
 async function init() {
   const authenticated = await checkAuth();
   if (!authenticated) return;
+
+  // SECURITY: Fetch CSRF token on page load
+  await fetchCsrfToken();
 
   // Initialize icon preview functionality
   initIconPreview();

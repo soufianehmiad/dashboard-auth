@@ -1,3 +1,60 @@
+// SECURITY: CSRF token management
+let csrfToken = null;
+
+async function fetchCsrfToken() {
+  try {
+    const response = await fetch('/api/csrf-token', {
+      credentials: 'same-origin'
+    });
+
+    if (!response.ok) {
+      console.error('Failed to fetch CSRF token');
+      return null;
+    }
+
+    const data = await response.json();
+    csrfToken = data.token;
+    return csrfToken;
+  } catch (err) {
+    console.error('CSRF token fetch error:', err);
+    return null;
+  }
+}
+
+async function authenticatedFetch(url, options = {}) {
+  if (options.method && ['POST', 'PUT', 'DELETE'].includes(options.method.toUpperCase())) {
+    if (!csrfToken) {
+      await fetchCsrfToken();
+    }
+
+    options.headers = {
+      ...options.headers,
+      'x-csrf-token': csrfToken
+    };
+  }
+
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    ...options
+  });
+
+  if (response.status === 403) {
+    console.log('CSRF token expired, refreshing...');
+    await fetchCsrfToken();
+
+    if (options.method && ['POST', 'PUT', 'DELETE'].includes(options.method.toUpperCase())) {
+      options.headers = {
+        ...options.headers,
+        'x-csrf-token': csrfToken
+      };
+    }
+
+    return fetch(url, { credentials: 'same-origin', ...options });
+  }
+
+  return response;
+}
+
 // Hardcoded services as fallback
 const FALLBACK_SERVICES = {
   contentManagement: [
@@ -319,9 +376,8 @@ document.getElementById('logoutBtn').addEventListener('click', async (e) => {
   e.preventDefault();
 
   try {
-    await fetch('/api/logout', {
-      method: 'POST',
-      credentials: 'same-origin'
+    await authenticatedFetch('/api/logout', {
+      method: 'POST'
     });
   } catch (err) {
     console.error('Logout error:', err);
@@ -333,6 +389,9 @@ document.getElementById('logoutBtn').addEventListener('click', async (e) => {
 async function init() {
   const authenticated = await checkAuth();
   if (!authenticated) return;
+
+  // SECURITY: Fetch CSRF token on page load
+  await fetchCsrfToken();
 
   // Load services from API (falls back to hardcoded if API fails)
   await loadServicesFromAPI();
