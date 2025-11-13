@@ -42,6 +42,66 @@ const NGINX_CONTAINER = 'arr-proxy';
 const NGINX_CONFIG_FILE = '/etc/nginx/conf.d/default.conf';
 const NGINX_CONFIG_HOST_PATH = '/opt/nginx/conf.d/default.conf';
 
+// SECURITY: Input length limits to prevent DoS
+const INPUT_LIMITS = {
+  username: 50,
+  password: 128,
+  displayName: 100,
+  serviceName: 100,
+  servicePath: 200,
+  serviceUrl: 500,
+  categoryName: 100,
+  categoryId: 50,
+  nginxConfig: 50000 // 50KB limit for nginx config
+};
+
+// SECURITY: Sanitize sensitive data from logs and error messages
+function sanitizeForLogging(message) {
+  if (typeof message !== 'string') {
+    message = JSON.stringify(message);
+  }
+
+  // Redact API keys in URLs
+  message = message.replace(/apikey=[^&\s]+/gi, 'apikey=[REDACTED]');
+  message = message.replace(/api_key=[^&\s]+/gi, 'api_key=[REDACTED]');
+
+  // Redact tokens
+  message = message.replace(/token["\s:=]+[a-zA-Z0-9._-]+/gi, 'token=[REDACTED]');
+
+  // Redact passwords
+  message = message.replace(/"password":\s*"[^"]+"/gi, '"password":"[REDACTED]"');
+  message = message.replace(/password=[^&\s]+/gi, 'password=[REDACTED]');
+
+  // Redact authorization headers
+  message = message.replace(/authorization:\s*[^\s,}]+/gi, 'authorization: [REDACTED]');
+  message = message.replace(/x-api-key:\s*[^\s,}]+/gi, 'x-api-key: [REDACTED]');
+
+  return message;
+}
+
+// SECURITY: Safe console.error wrapper
+function secureLog(level, ...args) {
+  const sanitized = args.map(arg =>
+    typeof arg === 'string' ? sanitizeForLogging(arg) : arg
+  );
+  console[level](...sanitized);
+}
+
+// SECURITY: Validate input length to prevent DoS
+function validateInputLength(value, fieldName, maxLength) {
+  if (!value) return { valid: true };
+
+  if (typeof value !== 'string') {
+    return { valid: false, error: `${fieldName} must be a string` };
+  }
+
+  if (value.length > maxLength) {
+    return { valid: false, error: `${fieldName} exceeds maximum length of ${maxLength} characters` };
+  }
+
+  return { valid: true };
+}
+
 /**
  * NGINX PROXY MANAGEMENT - arr-proxy Container
  *
@@ -100,8 +160,74 @@ async function readNginxConfig() {
     const result = await execFilePromise('docker', ['exec', NGINX_CONTAINER, 'cat', NGINX_CONFIG_FILE]);
     return { success: true, content: result.stdout };
   } catch (error) {
-    console.error('Error reading nginx config:', error.message);
+    secureLog('error', 'Error reading nginx config:', error.message);
     return { success: false, error: error.message };
+  }
+}
+
+// SECURITY: SSRF protection - validate URLs before making requests
+function isValidServiceUrl(urlString) {
+  try {
+    const url = new URL(urlString);
+
+    // Only allow HTTP and HTTPS protocols
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      return { valid: false, error: 'Only HTTP and HTTPS protocols are allowed' };
+    }
+
+    // Block private IP ranges and localhost
+    const hostname = url.hostname.toLowerCase();
+
+    // Block localhost variations
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' ||
+        hostname === '0.0.0.0' || hostname === '::') {
+      return { valid: false, error: 'Localhost addresses are not allowed' };
+    }
+
+    // Block private IPv4 ranges
+    const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+    const match = hostname.match(ipv4Regex);
+    if (match) {
+      const [, a, b, c, d] = match.map(Number);
+
+      // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+      if (a === 10 ||
+          (a === 172 && b >= 16 && b <= 31) ||
+          (a === 192 && b === 168)) {
+        // Allow internal network (arr services are on 10.99.0.0/16)
+        if (a === 10 && b === 99) {
+          return { valid: true };
+        }
+        return { valid: false, error: 'Private IP addresses are not allowed' };
+      }
+
+      // 127.0.0.0/8 (already caught above but double-check)
+      if (a === 127) {
+        return { valid: false, error: 'Loopback addresses are not allowed' };
+      }
+
+      // 169.254.0.0/16 (link-local)
+      if (a === 169 && b === 254) {
+        return { valid: false, error: 'Link-local addresses are not allowed' };
+      }
+    }
+
+    // Block IPv6 private ranges
+    if (hostname.includes(':')) {
+      // fc00::/7 (unique local)
+      if (hostname.startsWith('fc') || hostname.startsWith('fd')) {
+        return { valid: false, error: 'IPv6 private addresses are not allowed' };
+      }
+      // fe80::/10 (link-local)
+      if (hostname.startsWith('fe8') || hostname.startsWith('fe9') ||
+          hostname.startsWith('fea') || hostname.startsWith('feb')) {
+        return { valid: false, error: 'IPv6 link-local addresses are not allowed' };
+      }
+    }
+
+    return { valid: true };
+  } catch (error) {
+    return { valid: false, error: 'Invalid URL format' };
   }
 }
 
@@ -146,7 +272,7 @@ async function writeNginxConfig(content) {
         try {
           fs.unlinkSync(backup.path);
         } catch (err) {
-          console.warn('Failed to delete old backup:', backup.name);
+          secureLog('warn', 'Failed to delete old backup:', backup.name);
         }
       });
     }
@@ -160,7 +286,7 @@ async function writeNginxConfig(content) {
     console.log('Nginx config written successfully (validated & sanitized)');
     return { success: true };
   } catch (error) {
-    console.error('Error writing nginx config:', error.message);
+    secureLog('error', 'Error writing nginx config:', error.message);
     return { success: false, error: error.message };
   }
 }
@@ -172,6 +298,12 @@ async function addNginxLocation(servicePath, proxyTarget, serviceName) {
 
   if (!proxyTarget.startsWith('http://') && !proxyTarget.startsWith('https://')) {
     return { success: false, error: 'Proxy target must start with http:// or https://' };
+  }
+
+  // SECURITY: SSRF protection
+  const urlValidation = isValidServiceUrl(proxyTarget);
+  if (!urlValidation.valid) {
+    return { success: false, error: `SSRF protection: ${urlValidation.error}` };
   }
 
   // Read current nginx config
@@ -260,14 +392,14 @@ async function reloadNginx() {
   try {
     // Test config first
     const testResult = await execFilePromise('docker', ['exec', NGINX_CONTAINER, 'nginx', '-t']);
-    console.log('Nginx config test:', testResult.stdout || testResult.stderr);
+    secureLog('log', 'Nginx config test:', sanitizeForLogging(testResult.stdout || testResult.stderr));
 
     // Reload nginx
     await execFilePromise('docker', ['exec', NGINX_CONTAINER, 'nginx', '-s', 'reload']);
     console.log('Nginx reloaded successfully');
     return { success: true, message: 'Nginx reloaded successfully' };
   } catch (error) {
-    console.error('Error reloading nginx:', error.message);
+    secureLog('error', 'Error reloading nginx:', error.message);
     return { success: false, error: error.message };
   }
 }
@@ -570,17 +702,30 @@ app.post('/api/login', loginLimiter, (req, res) => {
     return res.status(400).json({ error: 'Username and password required' });
   }
 
+  // SECURITY: Input length validation
+  const usernameValidation = validateInputLength(username, 'Username', INPUT_LIMITS.username);
+  if (!usernameValidation.valid) {
+    return res.status(400).json({ error: usernameValidation.error });
+  }
+
+  const passwordValidation = validateInputLength(password, 'Password', INPUT_LIMITS.password);
+  if (!passwordValidation.valid) {
+    return res.status(400).json({ error: passwordValidation.error });
+  }
+
   db.get('SELECT * FROM users WHERE username = ?', [username], (err, user) => {
     if (err) {
       return res.status(500).json({ error: 'Database error' });
     }
 
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
+    // SECURITY: Timing attack mitigation - always perform password comparison
+    // even if user doesn't exist, using a dummy hash
+    const dummyHash = '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'; // Pre-computed hash
+    const hashToCompare = user ? user.password : dummyHash;
 
-    bcrypt.compare(password, user.password, (err, isValid) => {
-      if (err || !isValid) {
+    bcrypt.compare(password, hashToCompare, (err, isValid) => {
+      // Always check both conditions to prevent timing leaks
+      if (err || !isValid || !user) {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
@@ -623,6 +768,17 @@ app.post('/api/change-password', verifyToken, doubleCsrfProtection, (req, res) =
     return res.status(400).json({ error: 'Current and new password required' });
   }
 
+  // SECURITY: Input length validation
+  const currentPwdValidation = validateInputLength(currentPassword, 'Current password', INPUT_LIMITS.password);
+  if (!currentPwdValidation.valid) {
+    return res.status(400).json({ error: currentPwdValidation.error });
+  }
+
+  const newPwdValidation = validateInputLength(newPassword, 'New password', INPUT_LIMITS.password);
+  if (!newPwdValidation.valid) {
+    return res.status(400).json({ error: newPwdValidation.error });
+  }
+
   if (newPassword.length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
@@ -634,12 +790,12 @@ app.post('/api/change-password', verifyToken, doubleCsrfProtection, (req, res) =
       return res.status(500).json({ error: 'Database error' });
     }
 
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+    // SECURITY: Timing attack mitigation - always perform password comparison
+    const dummyHash = '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
+    const hashToCompare = user ? user.password : dummyHash;
 
-    bcrypt.compare(currentPassword, user.password, (err, isValid) => {
-      if (err || !isValid) {
+    bcrypt.compare(currentPassword, hashToCompare, (err, isValid) => {
+      if (err || !isValid || !user) {
         return res.status(401).json({ error: 'Current password is incorrect' });
       }
 
@@ -670,12 +826,14 @@ app.post('/api/change-display-name', verifyToken, doubleCsrfProtection, (req, re
 
   const trimmedName = displayName.trim();
 
-  if (trimmedName.length < 2) {
-    return res.status(400).json({ error: 'Display name must be at least 2 characters' });
+  // SECURITY: Input length validation
+  const nameValidation = validateInputLength(trimmedName, 'Display name', INPUT_LIMITS.displayName);
+  if (!nameValidation.valid) {
+    return res.status(400).json({ error: nameValidation.error });
   }
 
-  if (trimmedName.length > 50) {
-    return res.status(400).json({ error: 'Display name must be less than 50 characters' });
+  if (trimmedName.length < 2) {
+    return res.status(400).json({ error: 'Display name must be at least 2 characters' });
   }
 
   const userId = req.user.id;
@@ -931,8 +1089,40 @@ app.post('/api/services', verifyToken, doubleCsrfProtection, async (req, res) =>
     return res.status(400).json({ error: 'Missing required fields: name, path, icon_url, category, service_type' });
   }
 
+  // SECURITY: Input length validation
+  const nameValidation = validateInputLength(name, 'Service name', INPUT_LIMITS.serviceName);
+  if (!nameValidation.valid) {
+    return res.status(400).json({ error: nameValidation.error });
+  }
+
+  const pathValidation = validateInputLength(path, 'Service path', INPUT_LIMITS.servicePath);
+  if (!pathValidation.valid) {
+    return res.status(400).json({ error: pathValidation.error });
+  }
+
+  const iconValidation = validateInputLength(icon_url, 'Icon URL', INPUT_LIMITS.serviceUrl);
+  if (!iconValidation.valid) {
+    return res.status(400).json({ error: iconValidation.error });
+  }
+
   if (service_type === 'proxied' && !proxy_target) {
     return res.status(400).json({ error: 'Proxied services require proxy_target' });
+  }
+
+  // SECURITY: SSRF protection for proxy_target
+  if (proxy_target) {
+    const urlValidation = isValidServiceUrl(proxy_target);
+    if (!urlValidation.valid) {
+      return res.status(400).json({ error: `Invalid proxy_target: ${urlValidation.error}` });
+    }
+  }
+
+  // SECURITY: SSRF protection for api_url
+  if (api_url) {
+    const urlValidation = isValidServiceUrl(api_url);
+    if (!urlValidation.valid) {
+      return res.status(400).json({ error: `Invalid api_url: ${urlValidation.error}` });
+    }
   }
 
   const validCategories = ['contentManagement', 'downloadClients', 'managementAnalytics'];
@@ -991,8 +1181,40 @@ app.put('/api/services/:id', verifyToken, doubleCsrfProtection, async (req, res)
     return res.status(400).json({ error: 'Missing required fields: name, path, icon_url, category, service_type' });
   }
 
+  // SECURITY: Input length validation
+  const nameValidation = validateInputLength(name, 'Service name', INPUT_LIMITS.serviceName);
+  if (!nameValidation.valid) {
+    return res.status(400).json({ error: nameValidation.error });
+  }
+
+  const pathValidation = validateInputLength(path, 'Service path', INPUT_LIMITS.servicePath);
+  if (!pathValidation.valid) {
+    return res.status(400).json({ error: pathValidation.error });
+  }
+
+  const iconValidation = validateInputLength(icon_url, 'Icon URL', INPUT_LIMITS.serviceUrl);
+  if (!iconValidation.valid) {
+    return res.status(400).json({ error: iconValidation.error });
+  }
+
   if (service_type === 'proxied' && !proxy_target) {
     return res.status(400).json({ error: 'Proxied services require proxy_target' });
+  }
+
+  // SECURITY: SSRF protection for proxy_target
+  if (proxy_target) {
+    const urlValidation = isValidServiceUrl(proxy_target);
+    if (!urlValidation.valid) {
+      return res.status(400).json({ error: `Invalid proxy_target: ${urlValidation.error}` });
+    }
+  }
+
+  // SECURITY: SSRF protection for api_url
+  if (api_url) {
+    const urlValidation = isValidServiceUrl(api_url);
+    if (!urlValidation.valid) {
+      return res.status(400).json({ error: `Invalid api_url: ${urlValidation.error}` });
+    }
   }
 
   const validCategories = ['contentManagement', 'downloadClients', 'managementAnalytics'];
@@ -1168,6 +1390,12 @@ app.put('/api/nginx/config', verifyToken, doubleCsrfProtection, async (req, res)
 
     if (!config) {
       return res.status(400).json({ error: 'Config content is required' });
+    }
+
+    // SECURITY: Input length validation to prevent DoS
+    const configValidation = validateInputLength(config, 'Nginx config', INPUT_LIMITS.nginxConfig);
+    if (!configValidation.valid) {
+      return res.status(400).json({ error: configValidation.error });
     }
 
     // Write the new config
@@ -1367,6 +1595,6 @@ app.use((req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Dashboard server running on port ${PORT}`);
-  console.log(`JWT_SECRET: ${JWT_SECRET.substring(0, 10)}...`);
+  console.log(`JWT_SECRET: [CONFIGURED] (${JWT_SECRET.length} characters)`);
 });
 
