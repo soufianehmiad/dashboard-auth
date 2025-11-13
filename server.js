@@ -1,7 +1,10 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const axios = require('axios');
@@ -37,7 +40,33 @@ if (JWT_SECRET.length < 32) {
   console.error('Generate a secure one with: openssl rand -base64 32');
   process.exit(1);
 }
-const DB_PATH = path.join(__dirname, 'data', 'users.db');
+
+// PostgreSQL configuration
+const pgConfig = {
+  host: process.env.POSTGRES_HOST || 'dashboard-postgres',
+  port: parseInt(process.env.POSTGRES_PORT || '5432'),
+  database: process.env.POSTGRES_DB || 'dashboard',
+  user: process.env.POSTGRES_USER || 'dashboard_app',
+  password: process.env.POSTGRES_PASSWORD,
+  max: 20, // Maximum number of clients in the pool
+  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+  connectionTimeoutMillis: 10000, // Return an error after 10 seconds if connection could not be established
+};
+
+// Validate PostgreSQL password
+if (!pgConfig.password) {
+  console.error('╔════════════════════════════════════════════════════════════╗');
+  console.error('║ CRITICAL ERROR: POSTGRES_PASSWORD not configured          ║');
+  console.error('║                                                            ║');
+  console.error('║ Set a secure random value in your .env file:              ║');
+  console.error('║   POSTGRES_PASSWORD=<your-random-password>                ║');
+  console.error('║                                                            ║');
+  console.error('║ Generate one with:                                        ║');
+  console.error('║   openssl rand -base64 32                                 ║');
+  console.error('╚════════════════════════════════════════════════════════════╝');
+  process.exit(1);
+}
+
 const NGINX_CONTAINER = 'arr-proxy';
 const NGINX_CONFIG_FILE = '/etc/nginx/conf.d/default.conf';
 const NGINX_CONFIG_HOST_PATH = '/opt/nginx/conf.d/default.conf';
@@ -539,190 +568,35 @@ app.use(express.static('public', {
   }
 }));
 
-// Initialize SQLite database
-const db = new sqlite3.Database(DB_PATH, (err) => {
-  if (err) console.error('Database error:', err);
-  else console.log('Connected to users.db');
+// Initialize PostgreSQL connection pool
+const pool = new Pool(pgConfig);
+
+// Test connection on startup
+pool.query('SELECT NOW()', (err, res) => {
+  if (err) {
+    console.error('╔════════════════════════════════════════════════════════════╗');
+    console.error('║ CRITICAL ERROR: PostgreSQL connection failed              ║');
+    console.error('║                                                            ║');
+    console.error('║ Error:', err.message);
+    console.error('║                                                            ║');
+    console.error('║ Check that:                                               ║');
+    console.error('║ 1. PostgreSQL container is running                        ║');
+    console.error('║ 2. POSTGRES_HOST, POSTGRES_PORT are correct              ║');
+    console.error('║ 3. POSTGRES_PASSWORD matches .env file                    ║');
+    console.error('╚════════════════════════════════════════════════════════════╝');
+    process.exit(1);
+  }
+  console.log('✓ Connected to PostgreSQL database');
 });
 
-// Create users table and default admin user
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    display_name TEXT,
-    password_must_change INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
-
-  // Add display_name, password_must_change, failed_login_attempts, locked_until columns if they don't exist (migration for existing databases)
-  db.all("PRAGMA table_info(users)", (err, columns) => {
-    if (!err) {
-      const hasDisplayName = columns.some(col => col.name === 'display_name');
-      const hasPasswordMustChange = columns.some(col => col.name === 'password_must_change');
-      const hasFailedAttempts = columns.some(col => col.name === 'failed_login_attempts');
-      const hasLockedUntil = columns.some(col => col.name === 'locked_until');
-
-      if (!hasDisplayName) {
-        db.run("ALTER TABLE users ADD COLUMN display_name TEXT", (err) => {
-          if (err) console.error('Error adding display_name column:', err);
-          else console.log('Added display_name column to users table');
-        });
-      }
-
-      if (!hasPasswordMustChange) {
-        db.run("ALTER TABLE users ADD COLUMN password_must_change INTEGER DEFAULT 0", (err) => {
-          if (err) console.error('Error adding password_must_change column:', err);
-          else console.log('Added password_must_change column to users table');
-        });
-      }
-
-      if (!hasFailedAttempts) {
-        db.run("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER DEFAULT 0", (err) => {
-          if (err) console.error('Error adding failed_login_attempts column:', err);
-          else console.log('Added failed_login_attempts column to users table');
-        });
-      }
-
-      if (!hasLockedUntil) {
-        db.run("ALTER TABLE users ADD COLUMN locked_until DATETIME", (err) => {
-          if (err) console.error('Error adding locked_until column:', err);
-          else console.log('Added locked_until column to users table');
-        });
-      }
-    }
-  });
-
-  // Create categories table
-  db.run(`CREATE TABLE IF NOT EXISTS categories (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    display_order INTEGER DEFAULT 0,
-    color TEXT DEFAULT '#58a6ff',
-    icon TEXT DEFAULT 'folder',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`, (err) => {
-    if (err) console.error('Error creating categories table:', err);
-
-    // Add color column if it doesn't exist (migration)
-    db.run(`ALTER TABLE categories ADD COLUMN color TEXT DEFAULT '#58a6ff'`, (err) => {
-      // Ignore error if column already exists
-      if (err && !err.message.includes('duplicate column')) {
-        console.error('Error adding color column:', err);
-      }
-    });
-
-    // Add icon column if it doesn't exist (migration)
-    db.run(`ALTER TABLE categories ADD COLUMN icon TEXT DEFAULT 'folder'`, (err) => {
-      // Ignore error if column already exists
-      if (err && !err.message.includes('duplicate column')) {
-        console.error('Error adding icon column:', err);
-      }
-    });
-
-    // Initialize default categories if table is empty
-    db.get("SELECT COUNT(*) as count FROM categories", (err, row) => {
-      if (!err && row.count === 0) {
-        const defaultCategories = [
-          { id: 'contentManagement', name: 'Content Management', display_order: 1, color: '#1f6feb', icon: 'film' },
-          { id: 'downloadClients', name: 'Download Clients', display_order: 2, color: '#238636', icon: 'download' },
-          { id: 'managementAnalytics', name: 'Management & Analytics', display_order: 3, color: '#a371f7', icon: 'chart' }
-        ];
-
-        defaultCategories.forEach(cat => {
-          db.run('INSERT INTO categories (id, name, display_order, color, icon) VALUES (?, ?, ?, ?, ?)',
-            [cat.id, cat.name, cat.display_order, cat.color, cat.icon]);
-        });
-        console.log('Initialized default categories');
-      }
-    });
-  });
-
-  // Create services table for dynamic service management
-  db.run(`CREATE TABLE IF NOT EXISTS services (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    path TEXT NOT NULL UNIQUE,
-    icon_url TEXT NOT NULL,
-    category TEXT NOT NULL,
-    service_type TEXT DEFAULT 'external',
-    proxy_target TEXT,
-    api_url TEXT,
-    api_key_env TEXT,
-    display_order INTEGER DEFAULT 0,
-    enabled INTEGER DEFAULT 1,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`, (err) => {
-    if (err) console.error('Error creating services table:', err);
-
-    // Migration: Add service_type and proxy_target columns if they don't exist
-    db.all("PRAGMA table_info(services)", (err, columns) => {
-      if (!err) {
-        const hasServiceType = columns.some(col => col.name === 'service_type');
-        const hasProxyTarget = columns.some(col => col.name === 'proxy_target');
-
-        if (!hasServiceType) {
-          db.run("ALTER TABLE services ADD COLUMN service_type TEXT DEFAULT 'external'", (err) => {
-            if (err) console.error('Error adding service_type column:', err);
-            else console.log('Added service_type column to services table');
-          });
-        }
-
-        if (!hasProxyTarget) {
-          db.run("ALTER TABLE services ADD COLUMN proxy_target TEXT", (err) => {
-            if (err) console.error('Error adding proxy_target column:', err);
-            else console.log('Added proxy_target column to services table');
-          });
-        }
-      }
-    });
-  });
-
-  db.get('SELECT username FROM users WHERE username = ?', ['admin'], (err, row) => {
-    if (!row) {
-      // SECURITY: Default password meets strong password policy (12+ chars, upper, lower, number, special)
-      const defaultPassword = 'Admin@123456';
-      bcrypt.hash(defaultPassword, 10, (err, hash) => {
-        if (err) {
-          console.error('Error hashing password:', err);
-          return;
-        }
-        // Security: Force password change on first login with default credentials
-        db.run('INSERT INTO users (username, password, password_must_change) VALUES (?, ?, ?)', ['admin', hash, 1], (err) => {
-          if (err) console.error('Error creating admin:', err);
-          else console.log('Default admin user created (admin/Admin@123456) - PASSWORD CHANGE REQUIRED');
-        });
-      });
-    }
-  });
-
-  // Migrate existing hardcoded services to database (one-time only)
-  db.get('SELECT COUNT(*) as count FROM services', (err, row) => {
-    if (!err && row.count === 0) {
-      console.log('Migrating hardcoded services to database...');
-      const defaultServices = [
-        { name: 'Sonarr', path: '/sonarr', icon_url: 'https://raw.githubusercontent.com/Sonarr/Sonarr/develop/Logo/128.png', category: 'contentManagement', api_url: 'http://10.99.0.10:8989/api/v3/system/status', api_key_env: 'SONARR_API_KEY', display_order: 1 },
-        { name: 'Sonarr Anime', path: '/anime', icon_url: 'https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/sonarr.png', category: 'contentManagement', api_url: 'http://10.99.0.10:8990/api/v3/system/status', api_key_env: 'SONARR_ANIME_API_KEY', display_order: 2 },
-        { name: 'Radarr', path: '/radarr', icon_url: 'https://raw.githubusercontent.com/Radarr/Radarr/develop/Logo/128.png', category: 'contentManagement', api_url: 'http://10.99.0.10:7878/api/v3/system/status', api_key_env: 'RADARR_API_KEY', display_order: 3 },
-        { name: 'Lidarr', path: '/lidarr', icon_url: 'https://raw.githubusercontent.com/Lidarr/Lidarr/develop/Logo/128.png', category: 'contentManagement', api_url: 'http://10.99.0.10:8686/api/v1/system/status', api_key_env: 'LIDARR_API_KEY', display_order: 4 },
-        { name: 'Prowlarr', path: '/prowlarr', icon_url: 'https://raw.githubusercontent.com/Prowlarr/Prowlarr/develop/Logo/128.png', category: 'contentManagement', api_url: 'http://10.99.0.10:9696/api/v1/system/status', api_key_env: 'PROWLARR_API_KEY', display_order: 5 },
-        { name: 'qBittorrent', path: '/qbit/', icon_url: 'https://raw.githubusercontent.com/qbittorrent/qBittorrent/master/src/icons/qbittorrent-tray.svg', category: 'downloadClients', api_url: 'http://10.99.0.10:8080/api/v2/app/version', api_key_env: null, display_order: 1 },
-        { name: 'SABnzbd', path: '/sab', icon_url: 'https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/sabnzbd.png', category: 'downloadClients', api_url: 'http://10.99.0.10:6789/api?mode=version&output=json', api_key_env: null, display_order: 2 },
-        { name: 'Tautulli', path: '/tautulli', icon_url: 'https://raw.githubusercontent.com/Tautulli/Tautulli/master/data/interfaces/default/images/logo.png', category: 'managementAnalytics', api_url: `http://10.99.0.10:8181/tautulli/api/v2?apikey=${process.env.TAUTULLI_API_KEY}&cmd=get_tautulli_info`, api_key_env: 'TAUTULLI_API_KEY', display_order: 1 },
-        { name: 'Plex', path: 'https://plex.cirrolink.com', icon_url: 'https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/png/plex.png', category: 'managementAnalytics', api_url: null, api_key_env: null, display_order: 2 }
-      ];
-
-      const stmt = db.prepare('INSERT INTO services (name, path, icon_url, category, api_url, api_key_env, display_order) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      defaultServices.forEach(service => {
-        stmt.run(service.name, service.path, service.icon_url, service.category, service.api_url, service.api_key_env, service.display_order);
-      });
-      stmt.finalize(() => {
-        console.log('Successfully migrated services to database');
-      });
-    }
-  });
+// Handle pool errors
+pool.on('error', (err) => {
+  console.error('Unexpected PostgreSQL error:', err);
+  process.exit(-1);
 });
+
+// Database schema initialized via docker-entrypoint-initdb.d/01-schema.sql
+// Data migrated via database/migrate-sqlite-to-postgres.js
 
 // JWT verification middleware
 const verifyToken = (req, res, next) => {
@@ -778,7 +652,7 @@ const validateContentType = (req, res, next) => {
 };
 
 // Routes
-app.post('/api/login', loginLimiter, validateContentType, (req, res) => {
+app.post('/api/login', loginLimiter, validateContentType, async (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -796,10 +670,9 @@ app.post('/api/login', loginLimiter, validateContentType, (req, res) => {
     return res.status(400).json({ error: passwordValidation.error });
   }
 
-  db.get('SELECT * FROM users WHERE username = ?', [username], (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
-    }
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+    let user = result.rows.length > 0 ? result.rows[0] : null;
 
     // SECURITY: Check if account is locked
     if (user && user.locked_until) {
@@ -813,7 +686,7 @@ app.post('/api/login', loginLimiter, validateContentType, (req, res) => {
         });
       } else {
         // Lock period expired, reset failed attempts
-        db.run('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [user.id]);
+        await pool.query('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1', [user.id]);
         user.failed_login_attempts = 0;
         user.locked_until = null;
       }
@@ -824,60 +697,65 @@ app.post('/api/login', loginLimiter, validateContentType, (req, res) => {
     const dummyHash = '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'; // Pre-computed hash
     const hashToCompare = user ? user.password : dummyHash;
 
-    bcrypt.compare(password, hashToCompare, (err, isValid) => {
-      // Always check both conditions to prevent timing leaks
-      if (err || !isValid || !user) {
-        // SECURITY: Increment failed login attempts
-        if (user) {
-          const failedAttempts = (user.failed_login_attempts || 0) + 1;
-          const maxAttempts = 10;
+    const isValid = await bcrypt.compare(password, hashToCompare);
 
-          if (failedAttempts >= maxAttempts) {
-            // Lock account for 30 minutes
-            const lockUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
-            db.run('UPDATE users SET failed_login_attempts = ?, locked_until = ? WHERE id = ?',
-              [failedAttempts, lockUntil.toISOString(), user.id], (err) => {
-                if (err) secureLog('error', 'Failed to lock account:', err);
-              });
-            return res.status(423).json({
-              error: 'Account locked due to too many failed login attempts. Please try again in 30 minutes.'
-            });
-          } else {
-            // Increment failed attempts
-            db.run('UPDATE users SET failed_login_attempts = ? WHERE id = ?', [failedAttempts, user.id]);
+    // Always check both conditions to prevent timing leaks
+    if (!isValid || !user) {
+      // SECURITY: Increment failed login attempts
+      if (user) {
+        const failedAttempts = (user.failed_login_attempts || 0) + 1;
+        const maxAttempts = 10;
+
+        if (failedAttempts >= maxAttempts) {
+          // Lock account for 30 minutes
+          const lockUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+          try {
+            await pool.query('UPDATE users SET failed_login_attempts = $1, locked_until = $2 WHERE id = $3',
+              [failedAttempts, lockUntil.toISOString(), user.id]);
+          } catch (err) {
+            secureLog('error', 'Failed to lock account:', err);
           }
+          return res.status(423).json({
+            error: 'Account locked due to too many failed login attempts. Please try again in 30 minutes.'
+          });
+        } else {
+          // Increment failed attempts
+          await pool.query('UPDATE users SET failed_login_attempts = $1 WHERE id = $2', [failedAttempts, user.id]);
         }
-        return res.status(401).json({ error: 'Invalid credentials' });
       }
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
-      // SECURITY: Reset failed login attempts on successful login
-      db.run('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [user.id]);
+    // SECURITY: Reset failed login attempts on successful login
+    await pool.query('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1', [user.id]);
 
-      const token = jwt.sign(
-        { id: user.id, username: user.username },
-        JWT_SECRET,
-        { expiresIn: '24h' }
-      );
+    const token = jwt.sign(
+      { id: user.id, username: user.username },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
 
-      // Set secure flag based on protocol (HTTPS via Cloudflare or HTTP locally)
-      const isSecure = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https';
+    // Set secure flag based on protocol (HTTPS via Cloudflare or HTTP locally)
+    const isSecure = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https';
 
-      res.cookie('token', token, {
-        httpOnly: true,
-        secure: isSecure,
-        sameSite: 'lax',
-        maxAge: 24 * 60 * 60 * 1000,
-        path: '/'
-      });
-
-      // Security: Return password change requirement status
-      res.json({
-        success: true,
-        username: user.username,
-        passwordMustChange: user.password_must_change === 1
-      });
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: isSecure,
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/'
     });
-  });
+
+    // Security: Return password change requirement status
+    res.json({
+      success: true,
+      username: user.username,
+      passwordMustChange: user.password_must_change === true
+    });
+  } catch (err) {
+    console.error('Database error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 app.post('/api/logout', validateContentType, doubleCsrfProtection, (req, res) => {
@@ -885,7 +763,7 @@ app.post('/api/logout', validateContentType, doubleCsrfProtection, (req, res) =>
   res.json({ success: true });
 });
 
-app.post('/api/change-password', verifyToken, validateContentType, doubleCsrfProtection, (req, res) => {
+app.post('/api/change-password', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword || !newPassword) {
@@ -911,39 +789,33 @@ app.post('/api/change-password', verifyToken, validateContentType, doubleCsrfPro
 
   const userId = req.user.id;
 
-  db.get('SELECT * FROM users WHERE id = ?', [userId], (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
-    }
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    const user = result.rows.length > 0 ? result.rows[0] : null;
 
     // SECURITY: Timing attack mitigation - always perform password comparison
     const dummyHash = '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
     const hashToCompare = user ? user.password : dummyHash;
 
-    bcrypt.compare(currentPassword, hashToCompare, (err, isValid) => {
-      if (err || !isValid || !user) {
-        return res.status(401).json({ error: 'Current password is incorrect' });
-      }
+    const isValid = await bcrypt.compare(currentPassword, hashToCompare);
 
-      bcrypt.hash(newPassword, 10, (err, hash) => {
-        if (err) {
-          return res.status(500).json({ error: 'Error hashing password' });
-        }
+    if (!isValid || !user) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
 
-        // Security: Clear password_must_change flag when password is successfully changed
-        db.run('UPDATE users SET password = ?, password_must_change = 0 WHERE id = ?', [hash, userId], (err) => {
-          if (err) {
-            return res.status(500).json({ error: 'Failed to update password' });
-          }
+    const hash = await bcrypt.hash(newPassword, 10);
 
-          res.json({ success: true, message: 'Password changed successfully' });
-        });
-      });
-    });
-  });
+    // Security: Clear password_must_change flag when password is successfully changed
+    await pool.query('UPDATE users SET password = $1, password_must_change = false WHERE id = $2', [hash, userId]);
+
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (err) {
+    console.error('Database error:', err);
+    return res.status(500).json({ error: 'Failed to update password' });
+  }
 });
 
-app.post('/api/change-display-name', verifyToken, validateContentType, doubleCsrfProtection, (req, res) => {
+app.post('/api/change-display-name', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
   const { displayName } = req.body;
 
   if (!displayName || !displayName.trim()) {
@@ -964,33 +836,41 @@ app.post('/api/change-display-name', verifyToken, validateContentType, doubleCsr
 
   const userId = req.user.id;
 
-  db.run('UPDATE users SET display_name = ? WHERE id = ?', [trimmedName, userId], function(err) {
-    if (err) {
-      return res.status(500).json({ error: 'Failed to update display name' });
-    }
+  try {
+    const result = await pool.query('UPDATE users SET display_name = $1 WHERE id = $2', [trimmedName, userId]);
 
-    if (this.changes === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     res.json({ success: true, message: 'Display name updated successfully', displayName: trimmedName });
-  });
+  } catch (err) {
+    console.error('Database error:', err);
+    return res.status(500).json({ error: 'Failed to update display name' });
+  }
 });
 
-app.get('/api/verify', verifyToken, (req, res) => {
+app.get('/api/verify', verifyToken, async (req, res) => {
   // Fetch user details including display_name and password_must_change
-  db.get('SELECT username, display_name, password_must_change FROM users WHERE id = ?', [req.user.id], (err, user) => {
-    if (err || !user) {
+  try {
+    const result = await pool.query('SELECT username, display_name, password_must_change FROM users WHERE id = $1', [req.user.id]);
+
+    if (result.rows.length === 0) {
       return res.status(500).json({ error: 'Failed to fetch user details' });
     }
+
+    const user = result.rows[0];
 
     res.json({
       authenticated: true,
       username: user.username,
       displayName: user.display_name || user.username,
-      passwordMustChange: user.password_must_change === 1
+      passwordMustChange: user.password_must_change === true
     });
-  });
+  } catch (err) {
+    console.error('Database error:', err);
+    return res.status(500).json({ error: 'Failed to fetch user details' });
+  }
 });
 
 app.get('/api/server-info', verifyToken, (req, res) => {
@@ -1034,86 +914,81 @@ app.get('/api/server-info', verifyToken, (req, res) => {
 // Category management API endpoints
 
 // GET all categories
-app.get('/api/categories', verifyToken, (req, res) => {
-  db.all('SELECT * FROM categories ORDER BY display_order', (err, rows) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
-    res.json(rows);
-  });
+app.get('/api/categories', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM categories ORDER BY display_order');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Database error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // GET categories with services (for dashboard display)
-app.get('/api/dashboard/categories', verifyToken, (req, res) => {
-  // Get categories first
-  db.all('SELECT * FROM categories ORDER BY display_order', (err, categories) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
+app.get('/api/dashboard/categories', verifyToken, async (req, res) => {
+  try {
+    // Get categories and services in parallel
+    const [categoriesResult, servicesResult] = await Promise.all([
+      pool.query('SELECT * FROM categories ORDER BY display_order'),
+      pool.query('SELECT * FROM services WHERE enabled = true ORDER BY category, display_order')
+    ]);
 
-    // Get all services
-    db.all('SELECT * FROM services WHERE enabled = 1 ORDER BY category, display_order', (err, services) => {
-      if (err) {
-        console.error('Database error:', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
+    const categories = categoriesResult.rows;
+    const services = servicesResult.rows;
 
-      // Group services by category and add to categories
-      const result = categories.map(cat => ({
-        ...cat,
-        services: services
-          .filter(s => s.category === cat.id)
-          .map(service => ({
-            id: service.id,
-            name: service.name,
-            path: service.path,
-            icon: service.icon_url,
-            category: service.category,
-            apiUrl: service.api_url,
-            apiKeyEnv: service.api_key_env,
-            displayOrder: service.display_order
-          }))
-      }));
+    // Group services by category and add to categories
+    const result = categories.map(cat => ({
+      ...cat,
+      services: services
+        .filter(s => s.category === cat.id)
+        .map(service => ({
+          id: service.id,
+          name: service.name,
+          path: service.path,
+          icon: service.icon_url,
+          category: service.category,
+          apiUrl: service.api_url,
+          apiKeyEnv: service.api_key_env,
+          displayOrder: service.display_order
+        }))
+    }));
 
-      res.json(result);
-    });
-  });
+    res.json(result);
+  } catch (err) {
+    console.error('Database error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // POST create new category
-app.post('/api/categories', verifyToken, validateContentType, doubleCsrfProtection, (req, res) => {
+app.post('/api/categories', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
   const { id, name, display_order, color, icon } = req.body;
 
   if (!id || !name) {
     return res.status(400).json({ error: 'Category ID and name are required' });
   }
 
-  // Check if category ID already exists
-  db.get('SELECT id FROM categories WHERE id = ?', [id], (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
-    }
-    if (row) {
+  try {
+    // Check if category ID already exists
+    const checkResult = await pool.query('SELECT id FROM categories WHERE id = $1', [id]);
+    if (checkResult.rows.length > 0) {
       return res.status(400).json({ error: 'Category ID already exists' });
     }
 
-    db.run('INSERT INTO categories (id, name, display_order, color, icon) VALUES (?, ?, ?, ?, ?)',
-      [id, name, display_order || 0, color || '#58a6ff', icon || 'folder'],
-      function(err) {
-        if (err) {
-          console.error('Error creating category:', err);
-          return res.status(500).json({ error: 'Failed to create category' });
-        }
-        res.json({ success: true, id: this.lastID });
-      }
+    const result = await pool.query(
+      'INSERT INTO categories (id, name, display_order, color, icon) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [id, name, display_order || 0, color || '#58a6ff', icon || 'folder']
     );
-  });
+
+    res.json({ success: true, id: result.rows[0].id });
+  } catch (err) {
+    console.error('Error creating category:', err);
+    return res.status(500).json({ error: 'Failed to create category' });
+  }
 });
 
 // PUT update category
-app.put('/api/categories/:id', verifyToken, validateContentType, doubleCsrfProtection, (req, res) => {
+app.put('/api/categories/:id', verifyToken, validateContentType, doubleCsrfProtection, async (req, res) => {
   const { id } = req.params;
   const { name, display_order, color, icon } = req.body;
 
@@ -1121,62 +996,60 @@ app.put('/api/categories/:id', verifyToken, validateContentType, doubleCsrfProte
     return res.status(400).json({ error: 'Category name is required' });
   }
 
-  db.run('UPDATE categories SET name = ?, display_order = ?, color = ?, icon = ? WHERE id = ?',
-    [name, display_order || 0, color || '#58a6ff', icon || 'folder', id],
-    function(err) {
-      if (err) {
-        console.error('Error updating category:', err);
-        return res.status(500).json({ error: 'Failed to update category' });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: 'Category not found' });
-      }
-      res.json({ success: true });
+  try {
+    const result = await pool.query(
+      'UPDATE categories SET name = $1, display_order = $2, color = $3, icon = $4 WHERE id = $5',
+      [name, display_order || 0, color || '#58a6ff', icon || 'folder', id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Category not found' });
     }
-  );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error updating category:', err);
+    return res.status(500).json({ error: 'Failed to update category' });
+  }
 });
 
 // DELETE category (with safety check)
-app.delete('/api/categories/:id', verifyToken, doubleCsrfProtection, (req, res) => {
+app.delete('/api/categories/:id', verifyToken, doubleCsrfProtection, async (req, res) => {
   const { id } = req.params;
 
-  // Check if any services are using this category
-  db.get('SELECT COUNT(*) as count FROM services WHERE category = ? AND enabled = 1', [id], (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
-    }
+  try {
+    // Check if any services are using this category
+    const countResult = await pool.query('SELECT COUNT(*) as count FROM services WHERE category = $1 AND enabled = true', [id]);
+    const count = parseInt(countResult.rows[0].count);
 
-    if (row.count > 0) {
+    if (count > 0) {
       return res.status(400).json({
         error: 'Cannot delete category',
-        message: `This category has ${row.count} service(s) assigned to it. Please reassign or delete those services first.`,
-        serviceCount: row.count
+        message: `This category has ${count} service(s) assigned to it. Please reassign or delete those services first.`,
+        serviceCount: count
       });
     }
 
     // Safe to delete
-    db.run('DELETE FROM categories WHERE id = ?', [id], function(err) {
-      if (err) {
-        console.error('Error deleting category:', err);
-        return res.status(500).json({ error: 'Failed to delete category' });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: 'Category not found' });
-      }
-      res.json({ success: true });
-    });
-  });
+    const result = await pool.query('DELETE FROM categories WHERE id = $1', [id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting category:', err);
+    return res.status(500).json({ error: 'Failed to delete category' });
+  }
 });
 
 // Service management API endpoints
 
 // GET all services from database
-app.get('/api/services', verifyToken, (req, res) => {
-  db.all('SELECT * FROM services WHERE enabled = 1 ORDER BY category, display_order', (err, rows) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
+app.get('/api/services', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM services WHERE enabled = true ORDER BY category, display_order');
 
     // Transform rows into frontend format
     const services = {
@@ -1185,7 +1058,7 @@ app.get('/api/services', verifyToken, (req, res) => {
       managementAnalytics: []
     };
 
-    rows.forEach(service => {
+    result.rows.forEach(service => {
       const serviceObj = {
         id: service.id,
         name: service.name,
@@ -1204,7 +1077,10 @@ app.get('/api/services', verifyToken, (req, res) => {
     });
 
     res.json(services);
-  });
+  } catch (err) {
+    console.error('Database error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // POST create new service
@@ -1256,46 +1132,47 @@ app.post('/api/services', verifyToken, validateContentType, doubleCsrfProtection
     return res.status(400).json({ error: 'Invalid category' });
   }
 
-  db.run(
-    'INSERT INTO services (name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [name, path, icon_url, category, service_type, proxy_target || null, api_url || null, api_key_env || null, display_order || 0],
-    async function(err) {
-      if (err) {
-        if (err.message.includes('UNIQUE constraint failed')) {
-          return res.status(409).json({ error: 'Service with this path already exists' });
-        }
-        console.error('Database error:', err);
-        return res.status(500).json({ error: 'Database error' });
-      }
+  try {
+    const result = await pool.query(
+      'INSERT INTO services (name, path, icon_url, category, service_type, proxy_target, api_url, api_key_env, display_order) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id',
+      [name, path, icon_url, category, service_type, proxy_target || null, api_url || null, api_key_env || null, display_order || 0]
+    );
 
-      // Create nginx config for proxied services
-      let nginxStatus = { configured: false, error: null, warning: null };
-      if (service_type === 'proxied') {
-        const nginxResult = await addNginxLocation(path, proxy_target, name);
-        if (!nginxResult.success) {
-          console.warn('Failed to add nginx location:', nginxResult.error);
-          nginxStatus.error = nginxResult.error;
-          nginxStatus.warning = 'Nginx config update failed. Service saved but proxy may not work. Check that dashboard container has access to docker socket.';
+    const serviceId = result.rows[0].id;
+
+    // Create nginx config for proxied services
+    let nginxStatus = { configured: false, error: null, warning: null };
+    if (service_type === 'proxied') {
+      const nginxResult = await addNginxLocation(path, proxy_target, name);
+      if (!nginxResult.success) {
+        console.warn('Failed to add nginx location:', nginxResult.error);
+        nginxStatus.error = nginxResult.error;
+        nginxStatus.warning = 'Nginx config update failed. Service saved but proxy may not work. Check that dashboard container has access to docker socket.';
+      } else {
+        // Reload nginx
+        const reloadResult = await reloadNginx();
+        if (!reloadResult.success) {
+          nginxStatus.warning = 'Nginx location added but reload failed. You may need to reload nginx manually.';
+          nginxStatus.error = reloadResult.error;
         } else {
-          // Reload nginx
-          const reloadResult = await reloadNginx();
-          if (!reloadResult.success) {
-            nginxStatus.warning = 'Nginx location added but reload failed. You may need to reload nginx manually.';
-            nginxStatus.error = reloadResult.error;
-          } else {
-            nginxStatus.configured = true;
-          }
+          nginxStatus.configured = true;
         }
       }
-
-      res.json({
-        success: true,
-        id: this.lastID,
-        message: 'Service created successfully',
-        nginx: nginxStatus
-      });
     }
-  );
+
+    res.json({
+      success: true,
+      id: serviceId,
+      message: 'Service created successfully',
+      nginx: nginxStatus
+    });
+  } catch (err) {
+    if (err.code === '23505') { // PostgreSQL unique violation
+      return res.status(409).json({ error: 'Service with this path already exists' });
+    }
+    console.error('Database error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // PUT update existing service
@@ -1348,11 +1225,15 @@ app.put('/api/services/:id', verifyToken, validateContentType, doubleCsrfProtect
     return res.status(400).json({ error: 'Invalid category' });
   }
 
-  // First, get the old service info to handle nginx config changes
-  db.get('SELECT name, path, service_type FROM services WHERE id = ?', [id], async (err, oldService) => {
-    if (err || !oldService) {
+  try {
+    // First, get the old service info to handle nginx config changes
+    const oldServiceResult = await pool.query('SELECT name, path, service_type FROM services WHERE id = $1', [id]);
+
+    if (oldServiceResult.rows.length === 0) {
       return res.status(404).json({ error: 'Service not found' });
     }
+
+    const oldService = oldServiceResult.rows[0];
 
     // Delete old nginx location if it was proxied
     if (oldService.service_type === 'proxied') {
@@ -1360,79 +1241,78 @@ app.put('/api/services/:id', verifyToken, validateContentType, doubleCsrfProtect
     }
 
     // Update the service
-    db.run(
-      'UPDATE services SET name = ?, path = ?, icon_url = ?, category = ?, service_type = ?, proxy_target = ?, api_url = ?, api_key_env = ?, display_order = ?, enabled = ? WHERE id = ?',
-      [name, path, icon_url, category, service_type, proxy_target || null, api_url || null, api_key_env || null, display_order || 0, enabled !== undefined ? enabled : 1, id],
-      async function(err) {
-        if (err) {
-          if (err.message.includes('UNIQUE constraint failed')) {
-            return res.status(409).json({ error: 'Service with this path already exists' });
-          }
-          console.error('Database error:', err);
-          return res.status(500).json({ error: 'Database error' });
-        }
-
-        if (this.changes === 0) {
-          return res.status(404).json({ error: 'Service not found' });
-        }
-
-        // Add nginx location for proxied services
-        if (service_type === 'proxied') {
-          const nginxResult = await addNginxLocation(path, proxy_target, name);
-          if (!nginxResult.success) {
-            console.warn('Failed to add nginx location:', nginxResult.error);
-          } else {
-            await reloadNginx();
-          }
-        } else {
-          // Reload nginx to apply deletion
-          await reloadNginx();
-        }
-
-        res.json({
-          success: true,
-          message: 'Service updated successfully',
-          nginxConfigured: service_type === 'proxied'
-        });
-      }
+    const result = await pool.query(
+      'UPDATE services SET name = $1, path = $2, icon_url = $3, category = $4, service_type = $5, proxy_target = $6, api_url = $7, api_key_env = $8, display_order = $9, enabled = $10 WHERE id = $11',
+      [name, path, icon_url, category, service_type, proxy_target || null, api_url || null, api_key_env || null, display_order || 0, enabled !== undefined ? enabled : true, id]
     );
-  });
-});
 
-// DELETE service (soft delete by setting enabled = 0)
-app.delete('/api/services/:id', verifyToken, doubleCsrfProtection, async (req, res) => {
-  const { id } = req.params;
-
-  // First get the service info to remove nginx config
-  db.get('SELECT name, path, service_type FROM services WHERE id = ?', [id], async (err, service) => {
-    if (err || !service) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Service not found' });
     }
 
-    db.run('UPDATE services SET enabled = 0 WHERE id = ?', [id], async function(err) {
-      if (err) {
-        console.error('Database error:', err);
-        return res.status(500).json({ error: 'Database error' });
+    // Add nginx location for proxied services
+    if (service_type === 'proxied') {
+      const nginxResult = await addNginxLocation(path, proxy_target, name);
+      if (!nginxResult.success) {
+        console.warn('Failed to add nginx location:', nginxResult.error);
+      } else {
+        await reloadNginx();
       }
+    } else {
+      // Reload nginx to apply deletion
+      await reloadNginx();
+    }
 
-      if (this.changes === 0) {
-        return res.status(404).json({ error: 'Service not found' });
-      }
-
-      // Delete nginx config if it was proxied
-      if (service.service_type === 'proxied') {
-        const nginxResult = await removeNginxLocation(service.path, service.name);
-        if (nginxResult.success) {
-          await reloadNginx();
-        }
-      }
-
-      res.json({
-        success: true,
-        message: 'Service deleted successfully'
-      });
+    res.json({
+      success: true,
+      message: 'Service updated successfully',
+      nginxConfigured: service_type === 'proxied'
     });
-  });
+  } catch (err) {
+    if (err.code === '23505') { // PostgreSQL unique violation
+      return res.status(409).json({ error: 'Service with this path already exists' });
+    }
+    console.error('Database error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// DELETE service (soft delete by setting enabled = false)
+app.delete('/api/services/:id', verifyToken, doubleCsrfProtection, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // First get the service info to remove nginx config
+    const serviceResult = await pool.query('SELECT name, path, service_type FROM services WHERE id = $1', [id]);
+
+    if (serviceResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+
+    const service = serviceResult.rows[0];
+
+    const result = await pool.query('UPDATE services SET enabled = false WHERE id = $1', [id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+
+    // Delete nginx config if it was proxied
+    if (service.service_type === 'proxied') {
+      const nginxResult = await removeNginxLocation(service.path, service.name);
+      if (nginxResult.success) {
+        await reloadNginx();
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Service deleted successfully'
+    });
+  } catch (err) {
+    console.error('Database error:', err);
+    return res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // GET nginx location blocks
