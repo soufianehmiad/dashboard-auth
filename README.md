@@ -185,7 +185,7 @@ dashboard-auth/
 
 ## Security
 
-If you discover a security vulnerability, please email security@yourdomain.com instead of using the issue tracker.
+If you discover a security vulnerability, please email soufiane.hmiad@outlook.com instead of using the issue tracker.
 
 ## License
 
