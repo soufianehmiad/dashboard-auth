@@ -874,15 +874,22 @@ addCategoryBtn.addEventListener('click', () => {
   document.getElementById('categoryIcon').value = 'folder';
   document.getElementById('categoryColor').value = '#58a6ff';
   document.getElementById('categoryOrder').value = '0';
-  categoryModal.style.display = 'block';
+  categoryModal.classList.add('show');
 });
 
 closeCategoryModalBtn.addEventListener('click', () => {
-  categoryModal.style.display = 'none';
+  categoryModal.classList.remove('show');
 });
 
 cancelCategoryBtn.addEventListener('click', () => {
-  categoryModal.style.display = 'none';
+  categoryModal.classList.remove('show');
+});
+
+// Close modal on background click
+categoryModal.addEventListener('click', (e) => {
+  if (e.target === categoryModal) {
+    categoryModal.classList.remove('show');
+  }
 });
 
 categoryForm.addEventListener('submit', async (e) => {
@@ -899,7 +906,7 @@ function editCategory(category) {
   document.getElementById('categoryIcon').value = category.icon || 'folder';
   document.getElementById('categoryColor').value = category.color || '#58a6ff';
   document.getElementById('categoryOrder').value = category.display_order;
-  categoryModal.style.display = 'block';
+  categoryModal.classList.add('show');
 }
 
 async function saveCategory() {
@@ -934,7 +941,7 @@ async function saveCategory() {
     }
 
     showCategoriesMessage(`Category ${isEdit ? 'updated' : 'created'} successfully`, 'success');
-    categoryModal.style.display = 'none';
+    categoryModal.classList.remove('show');
     await loadCategories();
   } catch (error) {
     console.error('Error saving category:', error);
