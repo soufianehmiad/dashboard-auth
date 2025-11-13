@@ -252,11 +252,26 @@ main {
   color: #ffffff;
   border: 1px solid #2ea043;
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
 }
 
 .primary-btn:hover {
   background: #2ea043;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(35, 134, 54, 0.3);
+}
+
+.primary-btn:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .secondary-btn {
@@ -273,8 +288,13 @@ main {
 }
 
 .secondary-btn:hover {
-  background: var(--color-border);
+  background: var(--color-bg-tertiary);
   border-color: var(--color-accent);
+  transform: translateY(-1px);
+}
+
+.secondary-btn:active {
+  transform: translateY(0);
 }
 
 .danger-btn {
@@ -294,6 +314,13 @@ main {
   background: var(--color-danger);
   color: #ffffff;
   border-color: var(--color-danger);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(248, 81, 73, 0.3);
+}
+
+.danger-btn:active {
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 .services-list {
@@ -413,14 +440,25 @@ main {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(13, 17, 23, 0.9);
+  background: rgba(13, 17, 23, 0);
   z-index: 1000;
   align-items: center;
   justify-content: center;
+  transition: background 0.3s ease;
 }
 
 .modal.show {
   display: flex;
+  animation: fadeIn 0.3s ease forwards;
+}
+
+@keyframes fadeIn {
+  from {
+    background: rgba(13, 17, 23, 0);
+  }
+  to {
+    background: rgba(13, 17, 23, 0.9);
+  }
 }
 
 .modal-content {
@@ -430,6 +468,14 @@ main {
   width: 90%;
   max-height: 90vh;
   overflow-y: auto;
+  transform: scale(0.9) translateY(-20px);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.modal.show .modal-content {
+  transform: scale(1) translateY(0);
+  opacity: 1;
 }
 
 .modal-header {

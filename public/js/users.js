@@ -20,6 +20,46 @@ const ROLE_HIERARCHY = {
   'read_only': 1
 };
 
+// Toast Notifications
+function showToast(type, title, message) {
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+
+  const icon = type === 'success' ? '✓' : type === 'error' ? '✕' : 'ⓘ';
+
+  toast.innerHTML = `
+    <div class="toast-icon">${icon}</div>
+    <div class="toast-content">
+      <div class="toast-title">${title}</div>
+      ${message ? `<div class="toast-message">${message}</div>` : ''}
+    </div>
+    <button class="toast-close" onclick="this.parentElement.remove()">✕</button>
+  `;
+
+  container.appendChild(toast);
+
+  // Auto-remove after 5 seconds
+  setTimeout(() => {
+    toast.classList.add('removing');
+    setTimeout(() => toast.remove(), 300);
+  }, 5000);
+}
+
+function showSuccess(message) {
+  showToast('success', 'Success', message);
+}
+
+function showError(message) {
+  showToast('error', 'Error', message);
+}
+
+function showInfo(message) {
+  showToast('info', 'Info', message);
+}
+
 // SECURITY: Fetch CSRF token from server
 async function fetchCsrfToken() {
   try {
